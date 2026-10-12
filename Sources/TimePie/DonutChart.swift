@@ -85,15 +85,17 @@ struct DonutChart: View {
     private var centerFigure: some View {
         let focused = shown.first { $0.id == hoveredID }
         let minutes = focused?.minutes ?? total
-        let caption = focused.map { "\($0.name) · \(percent($0))" } ?? "logged"
         return VStack(spacing: 2) {
             Text(Duration.format(minutes: minutes))
                 .font(.system(size: 32, weight: .semibold, design: .rounded))
                 .foregroundStyle(total == 0 ? .tertiary : .primary)
                 .contentTransition(.numericText())
-            Text(caption)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            // Only a hovered slice gets a caption; the total stands on its own.
+            if let focused {
+                Text("\(focused.name) · \(percent(focused))")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
