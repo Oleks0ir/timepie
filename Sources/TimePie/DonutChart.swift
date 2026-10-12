@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 struct Slice: Identifiable, Equatable {
     let id: UUID
@@ -9,9 +10,9 @@ struct Slice: Identifiable, Equatable {
 
 /// Part-to-whole at a glance. 100% is the time you logged, not the whole week.
 ///
-/// Each slice is a stroked arc rather than a filled wedge, and slices meet flush with
-/// no separating gap — this palette's adjacent pairs validate at CVD ΔE 9.1 (light) and
-/// 8.4 (dark), both clear of the ≥8 target, so hue alone carries the separation.
+/// Drawn with Swift Charts as rounded sectors with a hairline gap between them, the
+/// way the system's own charts look. Hovering a slice (or its row) lifts it, dims the
+/// rest, and puts its name and hours in the centre.
 struct DonutChart: View {
     let slices: [Slice]
     var hoveredID: UUID?
@@ -19,46 +20,34 @@ struct DonutChart: View {
     var onHover: ((UUID?) -> Void)?
 
     private var total: Int { slices.reduce(0) { $0 + max(0, $1.minutes) } }
+    private var shown: [Slice] { slices.filter { $0.minutes > 0 } }
+    private var innerRatio: CGFloat { compact ? 0.52 : 0.64 }
 
     var body: some View {
         GeometryReader { geo in
             let side = min(geo.size.width, geo.size.height)
-            // The ring eats half the dead space between the hours figure and the
-            // inner edge: the hole was 0.28·side and the figure occupies ~0.16·side.
-            let ringWidth = compact ? side * 0.30 : side * 0.28
             let outerR = side / 2
-            let midR = outerR - ringWidth / 2
-            let innerR = outerR - ringWidth
+            let innerR = outerR * innerRatio
             let centre = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
 
             ZStack {
                 if total == 0 {
-                    // Empty skeleton: the circle holding its shape, waiting.
+                    // Empty skeleton: the ring holding its shape, waiting.
                     Circle()
-                        .strokeBorder(Ink.muted.opacity(0.35), lineWidth: 1)
-                        .frame(width: side - ringWidth, height: side - ringWidth)
+                        .stroke(.quaternary, lineWidth: outerR - innerR)
+                        .frame(width: outerR + innerR, height: outerR + innerR)
                 } else {
-                    ForEach(arcs(), id: \.slice.id) { arc in
-                        ArcShape(start: arc.start, end: arc.end)
-                            .stroke(
-                                Palette.color(slot: arc.slice.colorSlot),
-                                style: StrokeStyle(
-                                    lineWidth: hoveredID == arc.slice.id ? ringWidth + 6 : ringWidth,
-                                    lineCap: .butt
-                                )
-                            )
-                            .frame(width: midR * 2, height: midR * 2)
-                    }
+                    chart
                 }
 
                 if !compact {
                     centerFigure
+                        .frame(width: max(0, innerR * 2 - 24))
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            // Which wedge the pointer is over is computed from its angle and radius.
-            // Letting overlapping shapes in a ZStack decide meant a later slice could
-            // capture the pointer and highlight the wrong activity entirely.
+            // Which slice the pointer is over is worked out from its angle and radius,
+            // rather than trusting whichever shape happens to be on top.
             .onContinuousHover { phase in
                 guard !compact, let notify = onHover else { return }
                 switch phase {
@@ -70,44 +59,52 @@ struct DonutChart: View {
                     notify(nil)
                 }
             }
-            .animation(.easeInOut(duration: 0.35), value: slices)
-            .animation(.easeOut(duration: 0.12), value: hoveredID)
         }
         .aspectRatio(1, contentMode: .fit)
     }
 
-    /// The one number the app leads with. Proportional figures — tabular would make
-    /// a value like "12h" look loose at this size.
+    private var chart: some View {
+        Chart(shown) { slice in
+            let lifted = hoveredID == slice.id
+            SectorMark(
+                angle: .value("Minutes", slice.minutes),
+                innerRadius: .ratio(innerRatio),
+                outerRadius: .ratio(lifted || compact ? 1 : 0.95),
+                angularInset: compact ? 0.5 : 1.5
+            )
+            .cornerRadius(compact ? 1.5 : 5)
+            .foregroundStyle(Palette.color(slot: slice.colorSlot))
+            .opacity(hoveredID == nil || lifted ? 1 : 0.4)
+        }
+        .chartLegend(.hidden)
+        .animation(.easeInOut(duration: 0.35), value: slices)
+        .animation(.easeOut(duration: 0.15), value: hoveredID)
+    }
+
+    /// The one number the app leads with — or, while a slice is hovered, that slice's.
     private var centerFigure: some View {
-        Text(Duration.format(minutes: total))
-            .font(.system(size: 34, weight: .semibold))
-            .foregroundStyle(total == 0 ? Ink.muted : Ink.primary)
-            .contentTransition(.numericText())
-            .lineLimit(1)
-            .minimumScaleFactor(0.5)
-            .padding(.horizontal, 8)
+        let focused = shown.first { $0.id == hoveredID }
+        let minutes = focused?.minutes ?? total
+        let caption = focused.map { "\($0.name) · \(percent($0))" } ?? "logged"
+        return VStack(spacing: 2) {
+            Text(Duration.format(minutes: minutes))
+                .font(.system(size: 32, weight: .semibold, design: .rounded))
+                .foregroundStyle(total == 0 ? .tertiary : .primary)
+                .contentTransition(.numericText())
+            Text(caption)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .animation(.easeOut(duration: 0.15), value: hoveredID)
+    }
+
+    private func percent(_ slice: Slice) -> String {
+        "\(Int((Double(slice.minutes) / Double(max(total, 1)) * 100).rounded()))%"
     }
 
     // MARK: - Geometry
-
-    private struct Arc {
-        let slice: Slice
-        let start: Double
-        let end: Double
-    }
-
-    /// Angles in radians, starting at 12 o'clock and running clockwise.
-    private func arcs() -> [Arc] {
-        guard total > 0 else { return [] }
-        var cursor = -Double.pi / 2
-        var result: [Arc] = []
-        for slice in slices where slice.minutes > 0 {
-            let sweep = (Double(slice.minutes) / Double(total)) * 2 * Double.pi
-            result.append(Arc(slice: slice, start: cursor, end: cursor + sweep))
-            cursor += sweep
-        }
-        return result
-    }
 
     private func sliceID(at point: CGPoint, centre: CGPoint,
                          innerR: CGFloat, outerR: CGFloat) -> UUID? {
@@ -120,42 +117,17 @@ struct DonutChart: View {
         guard radius >= innerR, radius <= outerR else { return nil }
 
         // Screen y grows downward, so atan2 gives -π/2 at 12 o'clock; shifting by π/2
-        // puts 0 there and makes the angle grow clockwise, matching arcs().
+        // puts 0 there and makes the angle grow clockwise, as the chart draws.
         var angle = atan2(dy, dx) + Double.pi / 2
         if angle < 0 { angle += 2 * Double.pi }
 
         var cursor = 0.0
-        for slice in slices where slice.minutes > 0 {
+        for slice in shown {
             let sweep = (Double(slice.minutes) / Double(total)) * 2 * Double.pi
             if angle >= cursor && angle < cursor + sweep { return slice.id }
             cursor += sweep
         }
         return nil
-    }
-}
-
-/// `animatableData` is what lets a wedge grow smoothly when time is added, rather
-/// than snapping to its new size.
-private struct ArcShape: Shape {
-    var start: Double
-    var end: Double
-
-    var animatableData: AnimatablePair<Double, Double> {
-        get { AnimatablePair(start, end) }
-        set {
-            start = newValue.first
-            end = newValue.second
-        }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.addArc(center: CGPoint(x: rect.midX, y: rect.midY),
-                 radius: rect.width / 2,
-                 startAngle: .radians(start),
-                 endAngle: .radians(end),
-                 clockwise: false)
-        return p
     }
 }
 

@@ -30,6 +30,10 @@ final class Store {
     }
 
     static func defaultFileURL() -> URL {
+        // Lets a test run point at throwaway data, as the Windows build does.
+        if let dir = ProcessInfo.processInfo.environment["TIMEPIE_DATA_DIR"] {
+            return URL(fileURLWithPath: dir).appendingPathComponent("timepie.json")
+        }
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSHomeDirectory())

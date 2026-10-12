@@ -154,21 +154,24 @@ struct ActivityRow: View {
     private var controlZone: some View {
         HStack(spacing: 6) {
             Button(action: onToggleTimer) {
-                Image(systemName: isRunning ? "stop.fill" : "play.fill")
-                    .font(.system(size: 10))
-                    .frame(width: 14, height: 14)
-                    .foregroundStyle(isRunning ? Palette.color(slot: colorSlot) : Ink.muted)
+                Image(systemName: isRunning ? "stop.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 20))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isRunning ? Palette.color(slot: colorSlot) : Ink.secondary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Circle())
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(.plain)
             .help(isRunning ? "Stop and log this session" : "Start a timer")
 
-            Button("+30m") { onAdd(30) }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            Button("+1h") { onAdd(60) }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            Group {
+                Button("+30m") { onAdd(30) }
+                Button("+1h") { onAdd(60) }
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
 
             DragHandle(isDragging: isDragging, onChanged: onDragChanged, onEnded: onDragEnded)
         }
@@ -206,14 +209,14 @@ extension View {
     /// The hover tint, and the lifted look while the row is being dragged.
     func rowChrome(isHovered: Bool, isDragging: Bool) -> some View {
         background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
         )
         // While lifted, an opaque backing hides the rows it passes over.
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Ink.background)
-                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Ink.raised)
+                .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
                 .opacity(isDragging ? 1 : 0)
         )
     }
@@ -326,8 +329,11 @@ struct AddActivityField: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: mode == .folder ? "folder.badge.plus" : "plus.circle")
-                .foregroundStyle(Ink.muted)
+            Image(systemName: mode == .folder ? "folder.fill.badge.plus" : "plus.circle.fill")
+                .font(.system(size: 15))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.tint)
+                .frame(width: 17)
 
             if let mode {
                 TextField(mode == .folder ? "New folder" : "New activity", text: $draft)
@@ -336,28 +342,23 @@ struct AddActivityField: View {
                     .onSubmit(commit)
                     .onExitCommand { collapse() }
             } else {
-                Text("new activity")
-                    .foregroundStyle(Ink.muted)
+                Text("New Activity")
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button { open(.folder) } label: {
                     Image(systemName: "folder.badge.plus")
-                        .foregroundStyle(Ink.muted)
-                        .frame(width: 22, height: 18)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 20)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("New folder")
+                .help("New Folder")
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture { if mode == nil { open(.activity) } }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Ink.muted.opacity(mode != nil ? 0.4 : 0.15))
-                .frame(height: 1)
-        }
     }
 
     private func open(_ newMode: Mode) {

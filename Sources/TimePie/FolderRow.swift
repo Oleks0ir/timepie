@@ -42,7 +42,7 @@ struct FolderRow: View {
         .padding(.horizontal, 8)
         .rowChrome(isHovered: isHovered || isDropTarget, isDragging: isDragging)
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.accentColor.opacity(isDropTarget ? 0.8 : 0), lineWidth: 1.5)
         )
         .contentShape(Rectangle())
@@ -63,9 +63,9 @@ struct FolderRow: View {
                 .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                 .frame(width: RowMetrics.folderLineX * 2 + 1)
 
-            Image(systemName: "folder")
-                .font(.system(size: 12))
-                .foregroundStyle(Ink.muted)
+            Image(systemName: "folder.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(Ink.secondary)
 
             if editingName {
                 TextField("", text: $nameDraft)

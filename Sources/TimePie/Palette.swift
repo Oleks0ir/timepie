@@ -66,6 +66,26 @@ enum Ink {
     })
 }
 
+extension Ink {
+    /// A row lifted off the list while dragged: opaque, a step lighter than the card.
+    static let raised = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(hex: isDark ? "#3A3A3C" : "#FFFFFF")
+    })
+}
+
+extension View {
+    /// Liquid Glass on macOS 26, and the frosted material it replaced before that.
+    @ViewBuilder
+    func glassPanel(cornerRadius: CGFloat) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            background(.regularMaterial, in: .rect(cornerRadius: cornerRadius))
+        }
+    }
+}
+
 extension NSColor {
     convenience init(hex: String) {
         let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex

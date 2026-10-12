@@ -94,19 +94,31 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            chart
-            rows
-            Spacer(minLength: 12)
+        ScrollView {
+            VStack(spacing: 22) {
+                chart
+                rows
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 20)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        // History floats on glass over the bottom of the list, which scrolls under it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             HistoryStrip(
                 weeks: historyThumbs(),
                 selectedWeekStart: viewedWeek,
                 onSelect: { select(week: $0) }
             )
+            .padding([.horizontal, .bottom], 12)
         }
         .frame(minWidth: 460, minHeight: 620)
-        .background(Ink.background)
+        .navigationTitle(WeekMath.weekLabel(for: viewedWeek))
+        .navigationSubtitle(weekTotalMinutes == 0
+                            ? "Nothing logged"
+                            : "\(Duration.format(minutes: weekTotalMinutes)) logged")
+        .toolbar { weekToolbar }
         .onReceive(tick) { instant in
             // Only redraw while something is actually running.
             if running != nil { now = instant }
@@ -127,62 +139,36 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Toolbar
 
-    private var header: some View {
-        VStack(spacing: 6) {
-            stepper(back: { select(week: WeekMath.addWeeks(-1, to: viewedWeek)) },
-                    forward: { select(week: WeekMath.addWeeks(1, to: viewedWeek)) }) {
-                HStack(spacing: 6) {
-                    Text(WeekMath.weekLabel(for: viewedWeek))
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Ink.primary)
-                    Text("·").foregroundStyle(Ink.muted)
-                    Text(Duration.format(minutes: weekTotalMinutes))
-                        .font(.system(size: 13))
-                        .monospacedDigit()
-                        .foregroundStyle(Ink.secondary)
-                        .contentTransition(.numericText())
-                        .animation(.easeInOut(duration: 0.35), value: weekTotalMinutes)
+    /// Week navigation lives in the window's toolbar, the way Calendar does it: arrows
+    /// on the left beside the week as the window title, and a way back to this week.
+    @ToolbarContentBuilder
+    private var weekToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            ControlGroup {
+                Button { select(week: WeekMath.addWeeks(-1, to: viewedWeek)) } label: {
+                    Label("Previous Week", systemImage: "chevron.left")
                 }
+                .help("Previous week (←)")
+                Button { select(week: WeekMath.addWeeks(1, to: viewedWeek)) } label: {
+                    Label("Next Week", systemImage: "chevron.right")
+                }
+                .help("Next week (→)")
             }
         }
-        .padding(.top, 14)
-        .padding(.bottom, 10)
-    }
-
-    private func stepper<Label: View>(
-        back: @escaping () -> Void,
-        forward: @escaping () -> Void,
-        @ViewBuilder label: () -> Label
-    ) -> some View {
-        HStack(spacing: 2) {
-            chevron("chevron.left", action: back)
-            label()
-                .padding(.horizontal, 6)
-            chevron("chevron.right", action: forward)
+        ToolbarItem(placement: .primaryAction) {
+            Button("This Week") { select(week: Date()) }
+                .disabled(WeekMath.isSameWeek(viewedWeek, Date()))
+                .help("Go to the current week")
         }
-    }
-
-    /// A 30×30 hit target around a small glyph — the arrows were previously only as
-    /// clickable as the chevron was wide.
-    private func chevron(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .frame(width: 30, height: 30)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Ink.muted)
     }
 
     // MARK: - Chart
 
     private var chart: some View {
         DonutChart(slices: slices(), hoveredID: hoveredID, onHover: { hoveredID = $0 })
-            .frame(height: 250)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 20)
+            .frame(height: 240)
     }
 
     // MARK: - Rows
@@ -208,7 +194,9 @@ struct ContentView: View {
                 onAddFolder: { store.addFolder(named: $0, inWeek: viewedWeek) }
             )
         }
-        .padding(.horizontal, 16)
+        .padding(6)
+        // An inset grouped card, as in System Settings.
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
     }
 
     /// While dragging, the highlight stays on the lifted row rather than flickering
