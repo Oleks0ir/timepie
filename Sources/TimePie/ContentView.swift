@@ -35,12 +35,63 @@ struct ContentView: View {
 
     private struct RowDrag {
         let id: UUID
+        let isFolder: Bool
+        /// Its place in the rows when picked up.
         let from: Int
         var offset: CGFloat
+        /// Where the gap is, as an index into the rows without the lifted one.
+        var slot: Int
+        /// A folder the lifted task is held over, to drop it in.
+        var into: UUID?
+    }
+
+    /// One line in the list as drawn.
+    private enum Row: Identifiable {
+        case folder(Folder, tasks: [Activity])
+        case task(Activity, folder: UUID?)
+
+        var id: UUID {
+            switch self {
+            case .folder(let folder, _): folder.id
+            case .task(let activity, _): activity.id
+            }
+        }
+
+        /// The folder a task sits in. Nil for folders and loose tasks: the top level.
+        var parent: UUID? {
+            if case .task(_, let folder) = self { return folder }
+            return nil
+        }
     }
 
     private var weekEnd: Date { WeekMath.weekEnd(for: viewedWeek) }
-    private var activities: [Activity] { store.activities(forWeek: viewedWeek) }
+    private var outline: [OutlineItem] { store.outline(forWeek: viewedWeek) }
+
+    /// Every task in the week in list order, hidden ones included — the chart's slices.
+    private var activities: [Activity] {
+        outline.flatMap { item -> [Activity] in
+            switch item {
+            case .folder(_, let tasks): tasks
+            case .activity(let activity): [activity]
+            }
+        }
+    }
+
+    /// The rows on screen. A collapsed folder's tasks are left out, and so are the
+    /// tasks of a folder being dragged — they travel with it.
+    private func visibleRows(hidingTasksOf dragged: UUID? = nil) -> [Row] {
+        let dragged = dragged ?? drag?.id
+        return outline.flatMap { item -> [Row] in
+            switch item {
+            case .activity(let activity):
+                return [.task(activity, folder: nil)]
+            case .folder(let folder, let tasks):
+                let hidden = folder.collapsed || folder.id == dragged
+                return [.folder(folder, tasks: tasks)]
+                    + (hidden ? [] : tasks.map { .task($0, folder: folder.id) })
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -137,85 +188,169 @@ struct ContentView: View {
     // MARK: - Rows
 
     private var rows: some View {
-        VStack(spacing: rowSpacing) {
-            ForEach(Array(activities.enumerated()), id: \.element.id) { index, activity in
-                let isDragged = drag?.id == activity.id
-                ActivityRow(
-                    name: activity.name,
-                    colorSlot: activity.colorSlot,
-                    minutes: minutes(for: activity),
-                    // While dragging, the highlight stays on the lifted row rather
-                    // than flickering across the rows it passes.
-                    isHovered: drag.map { $0.id == activity.id } ?? (hoveredID == activity.id),
-                    isDragging: isDragged,
-                    isRunning: running?.activityID == activity.id,
-                    elapsedSeconds: elapsedSeconds(for: activity.id),
-                    takenSlots: Set(activities.map(\.colorSlot)),
-                    onAdd: { store.add(minutes: $0, to: activity.id, on: loggingDay) },
-                    onSetTotal: {
-                        store.setTotal($0, for: activity.id,
-                                       weekStart: viewedWeek, weekEnd: weekEnd, on: loggingDay)
-                    },
-                    onToggleTimer: { toggleTimer(for: activity) },
-                    onSetColor: { store.setColor(activity.id, to: $0) },
-                    onRename: { store.rename(activity.id, to: $0) },
-                    onDelete: {
-                        // Don't leave a timer running against something that's gone.
-                        if running?.activityID == activity.id { running = nil }
-                        store.delete(activity.id, fromWeek: viewedWeek)
-                    },
-                    onDragChanged: { dragRow(activity.id, at: index, by: $0) },
-                    onDragEnded: endDrag
-                )
-                .onHover { hoveredID = $0 ? activity.id : nil }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                    rowStride = $0 + rowSpacing
-                }
-                .offset(y: displacement(of: activity.id, at: index))
-                .zIndex(isDragged ? 1 : 0)
-                // The lifted row tracks the cursor exactly; the others slide aside.
-                .animation(isDragged ? nil : .easeOut(duration: 0.15),
-                           value: drag.map(dropIndex))
+        let rows = visibleRows()
+        return VStack(spacing: RowMetrics.spacing) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                let isDragged = drag?.id == row.id
+                rowView(row, at: index)
+                    .onHover { hoveredID = $0 ? row.id : nil }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        rowStride = $0 + RowMetrics.spacing
+                    }
+                    .offset(y: displacement(at: index))
+                    .zIndex(isDragged ? 1 : 0)
+                    // The lifted row tracks the cursor exactly; the others slide aside.
+                    .animation(isDragged ? nil : .easeOut(duration: 0.15), value: drag?.slot)
             }
 
-            AddActivityField(onAdd: { store.addActivity(named: $0, inWeek: viewedWeek) })
+            AddActivityField(
+                onAdd: { store.addActivity(named: $0, inWeek: viewedWeek) },
+                onAddFolder: { store.addFolder(named: $0, inWeek: viewedWeek) }
+            )
         }
         .padding(.horizontal, 16)
     }
 
+    /// While dragging, the highlight stays on the lifted row rather than flickering
+    /// across the rows it passes.
+    private func isHighlighted(_ id: UUID) -> Bool {
+        drag.map { $0.id == id } ?? (hoveredID == id)
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: Row, at index: Int) -> some View {
+        switch row {
+        case .folder(let folder, let tasks):
+            FolderRow(
+                name: folder.name,
+                taskCount: tasks.count,
+                minutes: tasks.reduce(0) { $0 + max(0, minutes(for: $1)) },
+                isCollapsed: folder.collapsed,
+                isHovered: isHighlighted(folder.id),
+                isDragging: drag?.id == folder.id,
+                isDropTarget: drag?.into == folder.id,
+                runningSeconds: folder.collapsed
+                    ? tasks.first { $0.id == running?.activityID }.map { elapsedSeconds(for: $0.id) }
+                    : nil,
+                onToggle: {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        store.setCollapsed(folder.id, !folder.collapsed)
+                    }
+                },
+                onRename: { store.renameFolder(folder.id, to: $0) },
+                onDelete: { withAnimation(.easeOut(duration: 0.15)) { store.deleteFolder(folder.id) } },
+                onDragChanged: { dragRow(folder.id, isFolder: true, at: index, by: $0) },
+                onDragEnded: endDrag
+            )
+        case .task(let activity, let folder):
+            ActivityRow(
+                name: activity.name,
+                colorSlot: activity.colorSlot,
+                minutes: minutes(for: activity),
+                isHovered: isHighlighted(activity.id),
+                isDragging: drag?.id == activity.id,
+                // A lifted task shows the line when it would land in a folder.
+                inFolder: (drag?.id == activity.id
+                           ? drag.flatMap { dropTarget(of: $0).parent }
+                           : folder) != nil,
+                isRunning: running?.activityID == activity.id,
+                elapsedSeconds: elapsedSeconds(for: activity.id),
+                takenSlots: Set(activities.map(\.colorSlot)),
+                onAdd: { store.add(minutes: $0, to: activity.id, on: loggingDay) },
+                onSetTotal: {
+                    store.setTotal($0, for: activity.id,
+                                   weekStart: viewedWeek, weekEnd: weekEnd, on: loggingDay)
+                },
+                onToggleTimer: { toggleTimer(for: activity) },
+                onSetColor: { store.setColor(activity.id, to: $0) },
+                onRename: { store.rename(activity.id, to: $0) },
+                onDelete: {
+                    // Don't leave a timer running against something that's gone.
+                    if running?.activityID == activity.id { running = nil }
+                    store.delete(activity.id, fromWeek: viewedWeek)
+                },
+                onDragChanged: { dragRow(activity.id, isFolder: false, at: index, by: $0) },
+                onDragEnded: endDrag
+            )
+        }
+    }
+
     // MARK: - Reordering
 
-    private let rowSpacing: CGFloat = 2
-
-    private func dragRow(_ id: UUID, at index: Int, by translation: CGFloat) {
+    private func dragRow(_ id: UUID, isFolder: Bool, at index: Int, by translation: CGFloat) {
+        var lifted = drag ?? RowDrag(id: id, isFolder: isFolder, from: index,
+                                     offset: 0, slot: index, into: nil)
+        let others = visibleRows(hidingTasksOf: id).filter { $0.id != id }
         // Kept within the list, so the row can't be dragged off either end.
-        let lowest = -CGFloat(index) * rowStride
-        let highest = CGFloat(activities.count - 1 - index) * rowStride
-        drag = RowDrag(id: id, from: drag?.from ?? index,
-                       offset: min(max(translation, lowest), highest))
+        let lowest = -CGFloat(lifted.from) * rowStride
+        let highest = CGFloat(others.count - lifted.from) * rowStride
+        lifted.offset = min(max(translation, lowest), highest)
+        settle(&lifted, among: others)
+        drag = lifted
     }
 
-    /// The place the lifted row would take if dropped now.
-    private func dropIndex(for drag: RowDrag) -> Int {
-        let shift = Int((drag.offset / rowStride).rounded())
-        return min(max(drag.from + shift, 0), activities.count - 1)
+    /// Moves the gap to follow the lifted row, a place at a time once it covers more
+    /// than half of its neighbour. A task passing over a folder pauses there instead:
+    /// held over the middle of the folder's row, it would drop into the folder.
+    private func settle(_ lifted: inout RowDrag, among others: [Row]) {
+        // The lifted row's top edge, in rows.
+        let top = lifted.offset / rowStride + CGFloat(lifted.from)
+        lifted.into = nil
+        while true {
+            let down = top > CGFloat(lifted.slot)
+            let overlap = abs(top - CGFloat(lifted.slot))
+            let neighbour = down ? lifted.slot : lifted.slot - 1
+            guard others.indices.contains(neighbour) else { return }
+
+            if !lifted.isFolder, case .folder(let folder, _) = others[neighbour] {
+                if overlap > 0.7 {
+                    lifted.slot += down ? 1 : -1
+                    continue
+                }
+                if overlap >= 0.3 { lifted.into = folder.id }
+                return
+            }
+            guard overlap > 0.5 else { return }
+            lifted.slot += down ? 1 : -1
+        }
     }
 
-    private func displacement(of id: UUID, at index: Int) -> CGFloat {
+    /// How far a row is pushed to open the gap; the lifted row follows the cursor.
+    private func displacement(at index: Int) -> CGFloat {
         guard let drag else { return 0 }
-        if drag.id == id { return drag.offset }
-        let to = dropIndex(for: drag)
-        if drag.from < to, index > drag.from, index <= to { return -rowStride }
-        if to < drag.from, index >= to, index < drag.from { return rowStride }
-        return 0
+        if index == drag.from { return drag.offset }
+        let k = index < drag.from ? index : index - 1
+        let shown = k < drag.slot ? k : k + 1
+        return CGFloat(shown - index) * rowStride
+    }
+
+    /// Where the lifted row would land: in a folder or at the top level (nil), and
+    /// its place among what this week shows there.
+    private func dropTarget(of lifted: RowDrag) -> (parent: UUID?, index: Int) {
+        if let into = lifted.into { return (into, .max) }
+        let others = visibleRows(hidingTasksOf: lifted.id).filter { $0.id != lifted.id }
+        let before = others.prefix(lifted.slot)
+        let topLevel = before.filter { $0.parent == nil }.count
+        // Folders don't nest; one dropped among a folder's tasks lands after it.
+        if lifted.isFolder { return (nil, topLevel) }
+        // Between two of a folder's tasks, or above its first: in that folder.
+        if lifted.slot < others.count, let folder = others[lifted.slot].parent {
+            return (folder, before.filter { $0.parent == folder }.count)
+        }
+        // Straight under an open folder that has nothing else in it.
+        if case .folder(let folder, _)? = before.last, !folder.collapsed {
+            return (folder.id, 0)
+        }
+        return (nil, topLevel)
     }
 
     private func endDrag() {
         guard let finished = drag else { return }
+        let target = dropTarget(of: finished)
         // Moving the row and clearing its offset in one animated step means the
         // rows that slid aside stay put; only the lifted one settles into its slot.
         withAnimation(.easeOut(duration: 0.15)) {
-            store.move(finished.id, to: dropIndex(for: finished), inWeek: viewedWeek)
+            store.move(finished.id, into: target.parent, at: target.index, inWeek: viewedWeek)
             drag = nil
         }
     }

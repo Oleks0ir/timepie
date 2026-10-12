@@ -18,6 +18,8 @@ struct Activity: Codable, Identifiable, Equatable {
     /// is gone from that week and every later one, but earlier weeks keep the row and
     /// its hours. Nil means it runs on indefinitely.
     var endWeek: String?
+    /// The folder it sits in, if any. Shared by every week, like the order.
+    var folderID: UUID?
 
     var firstWeekStart: Date {
         WeekMath.weekStart(for: firstWeek.map(DayStamp.parse) ?? createdAt)
@@ -25,6 +27,26 @@ struct Activity: Codable, Identifiable, Equatable {
 
     var endWeekStart: Date? {
         endWeek.map { WeekMath.weekStart(for: DayStamp.parse($0)) }
+    }
+}
+
+/// A named group of activities, drawn as a row that hides or shows the tasks beneath
+/// it. Membership lives on the activity (`folderID`), so a folder holds no time of its
+/// own, and deleting one only lets its tasks out.
+struct Folder: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+    /// Ordered alongside the activities that aren't in a folder.
+    var sortIndex: Int
+    /// Whether its tasks are hidden. Shared by every week.
+    var collapsed: Bool = false
+    var createdAt: Date = Date()
+    /// The week it was made in, as for `Activity.firstWeek`. Earlier weeks show it only
+    /// if one of its tasks is in them.
+    var firstWeek: String?
+
+    var firstWeekStart: Date {
+        WeekMath.weekStart(for: firstWeek.map(DayStamp.parse) ?? createdAt)
     }
 }
 
@@ -122,4 +144,31 @@ struct Payload: Codable {
     var version: Int = 1
     var activities: [Activity] = []
     var entries: [Entry] = []
+    var folders: [Folder] = []
+}
+
+extension Payload {
+    /// Files written before folders existed have no `folders` key. Declared in an
+    /// extension so the memberwise initialiser survives.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        activities = try c.decodeIfPresent([Activity].self, forKey: .activities) ?? []
+        entries = try c.decodeIfPresent([Entry].self, forKey: .entries) ?? []
+        folders = try c.decodeIfPresent([Folder].self, forKey: .folders) ?? []
+    }
+}
+
+/// One entry in a week's list: a folder with the tasks it holds that week, or a task
+/// that isn't in a folder.
+enum OutlineItem: Identifiable {
+    case folder(Folder, [Activity])
+    case activity(Activity)
+
+    var id: UUID {
+        switch self {
+        case .folder(let folder, _): folder.id
+        case .activity(let activity): activity.id
+        }
+    }
 }

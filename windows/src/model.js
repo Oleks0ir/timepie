@@ -122,6 +122,7 @@ export function nextSlot(taken) {
 export class Store {
   activities = [];
   entries = [];
+  folders = [];
   #undoStack = [];
   #undoLimit = 50;
   #listeners = new Set();
@@ -133,6 +134,7 @@ export class Store {
     try {
       const payload = JSON.parse(json);
       this.activities = payload.activities ?? [];
+      this.folders = payload.folders ?? [];
       this.entries = (payload.entries ?? []).map((e) => ({ ...e, day: DayStamp.string(DayStamp.parse(e.day)) }));
     } catch {
       return;
@@ -156,7 +158,7 @@ export class Store {
   }
 
   get payload() {
-    return { activities: this.activities, entries: this.entries, version: 1 };
+    return { activities: this.activities, entries: this.entries, folders: this.folders, version: 1 };
   }
 
   #save() {
@@ -166,7 +168,7 @@ export class Store {
 
   /** Snapshot, mutate, persist — the single path every edit takes. */
   #mutate(block) {
-    this.#undoStack.push(structuredClone({ activities: this.activities, entries: this.entries }));
+    this.#undoStack.push(structuredClone({ activities: this.activities, entries: this.entries, folders: this.folders }));
     if (this.#undoStack.length > this.#undoLimit) this.#undoStack.shift();
     block();
     this.#save();
@@ -177,6 +179,9 @@ export class Store {
     if (!previous) return;
     this.activities = previous.activities;
     this.entries = previous.entries;
+    // Showing or hiding a folder's tasks isn't an edit, so undo leaves it alone.
+    const collapsed = new Map(this.folders.map((f) => [f.id, f.collapsed]));
+    this.folders = previous.folders.map((f) => ({ ...f, collapsed: collapsed.get(f.id) ?? f.collapsed }));
     this.#save();
   }
 
@@ -194,6 +199,41 @@ export class Store {
       if (a.endWeek && weekStart(DayStamp.parse(a.endWeek)).getTime() <= startMs) return false;
       return this.#firstWeekStart(a).getTime() <= startMs || logged.has(a.id);
     });
+  }
+
+  /**
+   * The week's list as drawn: folders and loose tasks in order, each folder with the
+   * tasks it holds that week. A folder shows from the week it was made, and in any
+   * earlier week that has one of its tasks.
+   * Items are { kind: 'folder', id, folder, tasks } or { kind: 'activity', id, activity }.
+   */
+  outlineForWeek(start) {
+    const tasks = this.activitiesForWeek(start);
+    const known = new Set(this.folders.map((f) => f.id));
+    const startMs = start.getTime();
+    const shown = this.folders.filter((f) =>
+      this.#firstWeekStart(f).getTime() <= startMs || tasks.some((a) => a.folderID === f.id));
+    return [
+      ...shown.map((f) => [f.sortIndex, { kind: 'folder', id: f.id, folder: f, tasks: tasks.filter((a) => a.folderID === f.id) }]),
+      ...tasks.filter((a) => !known.has(a.folderID)).map((a) => [a.sortIndex, { kind: 'activity', id: a.id, activity: a }]),
+    ].sort((x, y) => x[0] - y[0]).map((x) => x[1]);
+  }
+
+  /**
+   * One group of siblings' ids in order: the top level (folders and loose tasks) when
+   * `parent` is null, otherwise that folder's tasks. With a week, only what it shows.
+   */
+  #siblings(parent, week) {
+    if (week) {
+      const items = this.outlineForWeek(weekStart(week));
+      if (!parent) return items.map((x) => x.id);
+      return items.find((x) => x.id === parent)?.tasks.map((a) => a.id) ?? [];
+    }
+    if (parent) return this.visibleActivities.filter((a) => a.folderID === parent).map((a) => a.id);
+    const known = new Set(this.folders.map((f) => f.id));
+    return [...this.folders, ...this.visibleActivities.filter((a) => !known.has(a.folderID))]
+      .sort((x, y) => x.sortIndex - y.sortIndex)
+      .map((x) => x.id);
   }
 
   entriesIn(start, end) {
@@ -237,7 +277,7 @@ export class Store {
   addActivity(name, inWeek) {
     this.#mutate(() => {
       const taken = this.activitiesForWeek(inWeek).map((a) => a.colorSlot);
-      const nextIndex = Math.max(-1, ...this.activities.map((a) => a.sortIndex)) + 1;
+      const nextIndex = this.#nextSortIndex();
       this.activities.push({
         id: newID(),
         name,
@@ -266,29 +306,86 @@ export class Store {
     this.#update(id, { name });
   }
 
-  /**
-   * Moves an activity to `to` in one week's list. There is a single order shared by
-   * every week, so it is placed beside the same neighbour in the full list. Activities
-   * this week doesn't show keep their places.
-   */
-  move(id, to, inWeek) {
-    const week = this.activitiesForWeek(weekStart(inWeek));
-    const from = week.findIndex((a) => a.id === id);
-    if (from < 0) return;
-    to = Math.min(Math.max(to, 0), week.length - 1);
-    if (to === from) return;
+  /** New things go to the bottom of the list. */
+  #nextSortIndex() {
+    return Math.max(-1, ...this.activities.map((a) => a.sortIndex), ...this.folders.map((f) => f.sortIndex)) + 1;
+  }
 
-    const [moved] = week.splice(from, 1);
-    const all = this.visibleActivities.filter((a) => a.id !== id);
-    const at = to < week.length
-      ? all.findIndex((a) => a.id === week[to].id)
-      : all.findIndex((a) => a.id === week[to - 1].id) + 1;
-    all.splice(at, 0, moved);
-
-    const order = new Map(all.map((a, i) => [a.id, i]));
+  addFolder(name, inWeek) {
     this.#mutate(() => {
-      this.activities = this.activities.map((a) => (order.has(a.id) ? { ...a, sortIndex: order.get(a.id) } : a));
+      this.folders.push({
+        id: newID(),
+        name,
+        sortIndex: this.#nextSortIndex(),
+        collapsed: false,
+        createdAt: isoNow(),
+        firstWeek: DayStamp.string(weekStart(inWeek)),
+      });
     });
+  }
+
+  renameFolder(id, name) {
+    if (!this.folders.some((f) => f.id === id)) return;
+    this.#mutate(() => {
+      this.folders = this.folders.map((f) => (f.id === id ? { ...f, name } : f));
+    });
+  }
+
+  /** Hiding or showing a folder's tasks is a view preference, so it skips undo. */
+  setCollapsed(id, collapsed) {
+    this.folders = this.folders.map((f) => (f.id === id ? { ...f, collapsed } : f));
+    this.#save();
+  }
+
+  /** Deleting a folder keeps its tasks: they move out to the top level, in its place. */
+  deleteFolder(id) {
+    if (!this.folders.some((f) => f.id === id)) return;
+    const tasks = this.#siblings(id, null);
+    const top = this.#siblings(null, null).flatMap((x) => (x === id ? tasks : [x]));
+    this.#mutate(() => {
+      this.folders = this.folders.filter((f) => f.id !== id);
+      this.activities = this.activities.map((a) => (a.folderID === id ? { ...a, folderID: null } : a));
+      this.#renumber(top);
+    });
+  }
+
+  /**
+   * Moves a task or folder to `index` among what this week shows in `parent` — a
+   * folder's id, or null for the top level. Folders only live at the top level.
+   *
+   * There is a single order shared by every week, so the item is placed beside the
+   * same neighbour in the full list. Items this week doesn't show keep their places.
+   */
+  move(id, parent, index, inWeek) {
+    const isFolder = this.folders.some((f) => f.id === id);
+    const activity = this.activities.find((a) => a.id === id);
+    if (!isFolder && !activity) return;
+    if (isFolder) parent = null;
+    parent = parent ?? null;
+
+    const shown = this.#siblings(parent, inWeek).filter((x) => x !== id);
+    const all = this.#siblings(parent, null).filter((x) => x !== id);
+    const k = Math.min(Math.max(index, 0), shown.length);
+    const at = k < shown.length
+      ? all.indexOf(shown[k])
+      : shown.length ? all.indexOf(shown[shown.length - 1]) + 1 : all.length;
+    all.splice(at < 0 ? all.length : at, 0, id);
+
+    const current = this.#siblings(parent, null);
+    const sameOrder = all.length === current.length && all.every((x, i) => x === current[i]);
+    if ((activity?.folderID ?? null) === parent && sameOrder) return;
+    this.#mutate(() => {
+      if (activity) this.activities = this.activities.map((a) => (a.id === id ? { ...a, folderID: parent } : a));
+      this.#renumber(all);
+    });
+  }
+
+  /** Sort indices only matter among siblings, so one group is renumbered at a time. */
+  #renumber(ids) {
+    const order = new Map(ids.map((x, i) => [x, i]));
+    const apply = (x) => (order.has(x.id) ? { ...x, sortIndex: order.get(x.id) } : x);
+    this.activities = this.activities.map(apply);
+    this.folders = this.folders.map(apply);
   }
 
   #firstWeekStart(a) {

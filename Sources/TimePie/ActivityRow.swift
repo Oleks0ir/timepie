@@ -12,6 +12,8 @@ struct ActivityRow: View {
     let isHovered: Bool
     /// Lifted off the list while its handle is being dragged.
     let isDragging: Bool
+    /// Sits in a folder: indented, with the folder's line running down its left.
+    let inFolder: Bool
 
     /// Live timer state. It lives only as long as the app does, so nothing here is persisted.
     let isRunning: Bool
@@ -38,32 +40,31 @@ struct ActivityRow: View {
     @State private var nameDraft = ""
     @State private var pickingColor = false
 
-    private let totalColumnWidth: CGFloat = 96
-
     var body: some View {
         HStack(spacing: 10) {
             nameZone
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             totalZone
-                .frame(width: totalColumnWidth)
+                .frame(width: RowMetrics.totalColumnWidth)
 
             controlZone
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.vertical, 3)
         .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
-        )
-        // While lifted, an opaque backing hides the rows it passes over.
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Ink.background)
-                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
-                .opacity(isDragging ? 1 : 0)
-        )
+        .overlay(alignment: .leading) {
+            if inFolder {
+                Rectangle()
+                    .fill(Ink.muted.opacity(0.45))
+                    .frame(width: 1)
+                    // A point past the row's edges into the gaps on either side, so the
+                    // line runs unbroken through every task in the folder.
+                    .padding(.vertical, -RowMetrics.spacing / 2)
+                    .padding(.leading, 8 + RowMetrics.folderLineX)
+            }
+        }
+        .rowChrome(isHovered: isHovered, isDragging: isDragging)
         // Double-click anywhere on the row to start or stop its timer. Renaming moved
         // to the right-click menu because the old double-click-the-name gesture would
         // have collided with this one.
@@ -120,6 +121,7 @@ struct ActivityRow: View {
                     .foregroundStyle(Ink.secondary)
             }
         }
+        .padding(.leading, inFolder ? RowMetrics.folderIndent : 0)
     }
 
     @ViewBuilder
@@ -168,29 +170,8 @@ struct ActivityRow: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-            dragHandle
+            DragHandle(isDragging: isDragging, onChanged: onDragChanged, onEnded: onDragEnded)
         }
-    }
-
-    /// Three dots stacked vertically. Press and hold to drag the row up or down.
-    private var dragHandle: some View {
-        VStack(spacing: 2.5) {
-            ForEach(0..<3, id: \.self) { _ in
-                Circle().frame(width: 3, height: 3)
-            }
-        }
-        .foregroundStyle(isDragging ? Ink.secondary : Ink.muted)
-        .frame(width: 14, height: 22)
-        .contentShape(Rectangle())
-        .modifier(GrabCursor(active: isDragging))
-        // Measured in the window's space: the handle moves with the row, so its own
-        // coordinates would shift under the cursor while dragging.
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { onDragChanged($0.translation.height) }
-                .onEnded { _ in onDragEnded() }
-        )
-        .help("Drag to reorder")
     }
 
     // MARK: - Commits
@@ -209,6 +190,60 @@ struct ActivityRow: View {
         let trimmed = nameDraft.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { onRename(trimmed) }
         editingName = false
+    }
+}
+
+/// Shared by task and folder rows so the columns line up.
+enum RowMetrics {
+    static let totalColumnWidth: CGFloat = 96
+    static let spacing: CGFloat = 2
+    /// How far a folder's tasks sit in from the left, and where its line runs.
+    static let folderIndent: CGFloat = 16
+    static let folderLineX: CGFloat = 5
+}
+
+extension View {
+    /// The hover tint, and the lifted look while the row is being dragged.
+    func rowChrome(isHovered: Bool, isDragging: Bool) -> some View {
+        background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
+        )
+        // While lifted, an opaque backing hides the rows it passes over.
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Ink.background)
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+                .opacity(isDragging ? 1 : 0)
+        )
+    }
+}
+
+/// Three dots stacked vertically. Press and hold to drag the row up or down.
+struct DragHandle: View {
+    let isDragging: Bool
+    /// Vertical distance travelled since the handle was pressed.
+    let onChanged: (CGFloat) -> Void
+    let onEnded: () -> Void
+
+    var body: some View {
+        VStack(spacing: 2.5) {
+            ForEach(0..<3, id: \.self) { _ in
+                Circle().frame(width: 3, height: 3)
+            }
+        }
+        .foregroundStyle(isDragging ? Ink.secondary : Ink.muted)
+        .frame(width: 14, height: 22)
+        .contentShape(Rectangle())
+        .modifier(GrabCursor(active: isDragging))
+        // Measured in the window's space: the handle moves with the row, so its own
+        // coordinates would shift under the cursor while dragging.
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { onChanged($0.translation.height) }
+                .onEnded { _ in onEnded() }
+        )
+        .help("Drag to reorder")
     }
 }
 
@@ -278,20 +313,24 @@ struct ColorSwatchPicker: View {
     }
 }
 
-/// The inline `+` below the rows — a field you type into, never a dialog.
+/// The inline `+` below the rows — a field you type into, never a dialog. The folder
+/// button at its right end opens the same field for naming a new folder.
 struct AddActivityField: View {
     let onAdd: (String) -> Void
-    @State private var expanded = false
+    let onAddFolder: (String) -> Void
+
+    private enum Mode { case activity, folder }
+    @State private var mode: Mode?
     @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "plus.circle")
+            Image(systemName: mode == .folder ? "folder.badge.plus" : "plus.circle")
                 .foregroundStyle(Ink.muted)
 
-            if expanded {
-                TextField("New activity", text: $draft)
+            if let mode {
+                TextField(mode == .folder ? "New folder" : "New activity", text: $draft)
                     .textFieldStyle(.plain)
                     .focused($focused)
                     .onSubmit(commit)
@@ -300,33 +339,48 @@ struct AddActivityField: View {
                 Text("new activity")
                     .foregroundStyle(Ink.muted)
                 Spacer()
+                Button { open(.folder) } label: {
+                    Image(systemName: "folder.badge.plus")
+                        .foregroundStyle(Ink.muted)
+                        .frame(width: 22, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("New folder")
             }
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
-        .onTapGesture {
-            expanded = true
-            focused = true
-        }
+        .onTapGesture { if mode == nil { open(.activity) } }
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Ink.muted.opacity(expanded ? 0.4 : 0.15))
+                .fill(Ink.muted.opacity(mode != nil ? 0.4 : 0.15))
                 .frame(height: 1)
         }
     }
 
+    private func open(_ newMode: Mode) {
+        mode = newMode
+        focused = true
+    }
+
     private func commit() {
         let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        if !trimmed.isEmpty { onAdd(trimmed) }
         draft = ""
+        if mode == .folder {
+            if !trimmed.isEmpty { onAddFolder(trimmed) }
+            collapse()
+            return
+        }
+        if !trimmed.isEmpty { onAdd(trimmed) }
         // Stay open — adding several in a row is the common case on first launch.
         focused = true
     }
 
     private func collapse() {
         draft = ""
-        expanded = false
+        mode = nil
         focused = false
     }
 }

@@ -33,6 +33,11 @@ const Chevron = ({ dir, size = 12 }) => {
 };
 const PlayGlyph = () => html`<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 1 L9 5 L2 9 Z" fill="currentColor" /></svg>`;
 const StopGlyph = () => html`<svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1.2" fill="currentColor" /></svg>`;
+const FolderGlyph = () => html`<svg width="14" height="12" viewBox="0 0 14 12" fill="none" stroke="currentColor"
+  stroke-width="1.1" stroke-linejoin="round"><path d="M1 2.5 Q1 1.5 2 1.5 H5 L6.5 3 H12 Q13 3 13 4 V9.5 Q13 10.5 12 10.5 H2 Q1 10.5 1 9.5 Z" /></svg>`;
+const FolderPlusGlyph = () => html`<svg width="16" height="13" viewBox="0 0 16 13" fill="none" stroke="currentColor"
+  stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M13 5.5 V4 Q13 3 12 3 H6.5 L5 1.5 H2 Q1 1.5 1 2.5 V9.5 Q1 10.5 2 10.5 H8.5" /><path d="M12.5 7.5 V12 M10.25 9.75 H14.75" /></svg>`;
 const PlusCircle = () => html`<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
   <circle cx="7" cy="7" r="6" /><path d="M7 4 V10 M4 7 H10" stroke-linecap="round" /></svg>`;
 
@@ -44,7 +49,9 @@ function App() {
   // The day a click attributes to. Always inside the viewed week.
   const [loggingDay, setLoggingDay] = useState(() => W.startOfDay(new Date()));
   const [hoveredID, setHoveredID] = useState(null);
-  // The row being dragged by its handle: { id, from, offset, stride }.
+  // The row being dragged by its handle: { id, isFolder, from, offset, stride, slot, into }.
+  // `slot` is where the gap is, as an index into the rows without the lifted one;
+  // `into` is a folder the lifted task is held over, to drop it in.
   const [drag, setDrag] = useState(null);
   // A running timer is deliberately *not* persisted: it dies with the app. Nothing is
   // written until you stop it, so a crash loses the session rather than inventing one.
@@ -80,32 +87,91 @@ function App() {
   }, []);
 
   const weekEnd = W.weekEnd(viewedWeek);
-  const activities = store.activitiesForWeek(viewedWeek);
+  const outline = store.outlineForWeek(viewedWeek);
+  // Every task in the week in list order, hidden ones included — the chart's slices.
+  const activities = outline.flatMap((x) => (x.kind === 'folder' ? x.tasks : [x.activity]));
   const minutesFor = (a) => store.minutes(a.id, viewedWeek, weekEnd);
   const weekTotal = store.totalMinutes(viewedWeek, weekEnd);
   const takenSlots = new Set(activities.map((a) => a.colorSlot));
+  const elapsed = running ? Math.max(0, Math.floor((now - running.startedAt) / 1000)) : 0;
 
-  /** The place the lifted row would take if dropped now. */
-  const dropIndex = (d) =>
-    Math.min(Math.max(d.from + Math.round(d.offset / d.stride), 0), activities.length - 1);
+  /**
+   * The rows on screen, each with the folder it sits in as `parent`. A collapsed
+   * folder's tasks are left out, and so are those of a folder being dragged.
+   */
+  const visibleRows = (hiding = drag?.id) => outline.flatMap((x) => {
+    if (x.kind === 'activity') return [{ ...x, parent: null }];
+    const hidden = x.folder.collapsed || x.id === hiding;
+    return [{ ...x, parent: null },
+      ...(hidden ? [] : x.tasks.map((a) => ({ kind: 'activity', id: a.id, activity: a, parent: x.id })))];
+  });
+  const rows = visibleRows();
 
-  const displacement = (id, index) => {
-    if (!drag) return 0;
-    if (drag.id === id) return drag.offset;
-    const to = dropIndex(drag);
-    if (drag.from < to && index > drag.from && index <= to) return -drag.stride;
-    if (to < drag.from && index >= to && index < drag.from) return drag.stride;
-    return 0;
+  /**
+   * Moves the gap to follow the lifted row, a place at a time once it covers more than
+   * half of its neighbour. A task passing over a folder pauses there instead: held over
+   * the middle of the folder's row, it would drop into the folder.
+   */
+  const settle = (d, others) => {
+    const top = d.offset / d.stride + d.from; // the lifted row's top edge, in rows
+    let slot = d.slot;
+    let into = null;
+    for (;;) {
+      const down = top > slot;
+      const overlap = Math.abs(top - slot);
+      const n = down ? slot : slot - 1;
+      if (n < 0 || n >= others.length) break;
+      if (!d.isFolder && others[n].kind === 'folder') {
+        if (overlap > 0.7) { slot += down ? 1 : -1; continue; }
+        if (overlap >= 0.3) into = others[n].id;
+        break;
+      }
+      if (overlap <= 0.5) break;
+      slot += down ? 1 : -1;
+    }
+    return { ...d, slot, into };
   };
 
-  const dragRow = (id, index, dy, stride) => {
-    // Kept within the list, so the row can't be dragged off either end.
-    const offset = Math.min(Math.max(dy, -index * stride), (activities.length - 1 - index) * stride);
-    setDrag((d) => ({ id, from: d?.from ?? index, offset, stride }));
+  const dragRow = (id, isFolder, index, dy, stride) => {
+    setDrag((d) => {
+      const lifted = d ?? { id, isFolder, from: index, slot: index, into: null };
+      const others = visibleRows(id).filter((r) => r.id !== id);
+      // Kept within the list, so the row can't be dragged off either end.
+      const offset = Math.min(Math.max(dy, -lifted.from * stride), (others.length - lifted.from) * stride);
+      return settle({ ...lifted, offset, stride }, others);
+    });
+  };
+
+  /** How far a row is pushed to open the gap; the lifted row follows the cursor. */
+  const displacement = (index) => {
+    if (!drag) return 0;
+    if (index === drag.from) return drag.offset;
+    const k = index < drag.from ? index : index - 1;
+    return ((k < drag.slot ? k : k + 1) - index) * drag.stride;
+  };
+
+  /** Where the lifted row would land: { parent (a folder, or null), index }. */
+  const dropTarget = (d) => {
+    if (d.into) return { parent: d.into, index: Infinity };
+    const others = visibleRows(d.id).filter((r) => r.id !== d.id);
+    const before = others.slice(0, d.slot);
+    const topLevel = before.filter((r) => !r.parent).length;
+    // Folders don't nest; one dropped among a folder's tasks lands after it.
+    if (d.isFolder) return { parent: null, index: topLevel };
+    // Between two of a folder's tasks, or above its first: in that folder.
+    const below = others[d.slot];
+    if (below?.parent) return { parent: below.parent, index: before.filter((r) => r.parent === below.parent).length };
+    // Straight under an open folder that has nothing else in it.
+    const above = before[before.length - 1];
+    if (above?.kind === 'folder' && !above.folder.collapsed) return { parent: above.id, index: 0 };
+    return { parent: null, index: topLevel };
   };
 
   const endDrag = () => {
-    if (drag) store.move(drag.id, dropIndex(drag), viewedWeek);
+    if (drag) {
+      const target = dropTarget(drag);
+      store.move(drag.id, target.parent, target.index, viewedWeek);
+    }
     setDrag(null);
   };
 
@@ -169,18 +235,42 @@ function App() {
       </div>
 
       <div class="rows ${drag ? 'reordering' : ''}">
-        ${activities.map((a, index) => html`
+        ${rows.map((r, index) => {
+          if (r.kind === 'folder') {
+            const f = r.folder;
+            return html`
+              <${FolderRow}
+                key=${r.id}
+                folder=${f}
+                taskCount=${r.tasks.length}
+                minutes=${r.tasks.reduce((sum, a) => sum + Math.max(0, minutesFor(a)), 0)}
+                isHovered=${drag ? drag.id === r.id : hoveredID === r.id}
+                isDragging=${drag?.id === r.id}
+                isDropTarget=${drag?.into === r.id}
+                offset=${displacement(index)}
+                runningSeconds=${f.collapsed && r.tasks.some((a) => a.id === running?.activityID) ? elapsed : null}
+                onHover=${(on) => setHoveredID(on ? r.id : null)}
+                onToggle=${() => store.setCollapsed(r.id, !f.collapsed)}
+                onRename=${(name) => store.renameFolder(r.id, name)}
+                onDelete=${() => store.deleteFolder(r.id)}
+                onDrag=${(dy, stride) => dragRow(r.id, true, index, dy, stride)}
+                onDragEnd=${endDrag}
+              />`;
+          }
+          const a = r.activity;
+          return html`
           <${ActivityRow}
             key=${a.id}
             activity=${a}
             minutes=${minutesFor(a)}
             isHovered=${drag ? drag.id === a.id : hoveredID === a.id}
             isDragging=${drag?.id === a.id}
-            offset=${displacement(a.id, index)}
-            onDrag=${(dy, stride) => dragRow(a.id, index, dy, stride)}
+            inFolder=${drag?.id === a.id ? !!dropTarget(drag).parent : !!r.parent}
+            offset=${displacement(index)}
+            onDrag=${(dy, stride) => dragRow(a.id, false, index, dy, stride)}
             onDragEnd=${endDrag}
             isRunning=${running?.activityID === a.id}
-            elapsedSeconds=${running?.activityID === a.id ? Math.max(0, Math.floor((now - running.startedAt) / 1000)) : 0}
+            elapsedSeconds=${running?.activityID === a.id ? elapsed : 0}
             takenSlots=${takenSlots}
             onHover=${(on) => setHoveredID(on ? a.id : null)}
             onAdd=${(m) => store.add(m, a.id, loggingDay)}
@@ -193,8 +283,10 @@ function App() {
               if (runningRef.current?.activityID === a.id) setRunning(null);
               store.delete(a.id, viewedWeek);
             }}
-          />`)}
-        <${AddActivityField} onAdd=${(name) => store.addActivity(name, viewedWeek)} />
+          />`;
+        })}
+        <${AddActivityField} onAdd=${(name) => store.addActivity(name, viewedWeek)}
+          onAddFolder=${(name) => store.addFolder(name, viewedWeek)} />
       </div>
 
       <${HistoryStrip} weeks=${thumbs} selected=${viewedWeek.getTime()} onSelect=${select} />
@@ -318,7 +410,7 @@ function CenterFigure({ minutes, width }) {
  * total column lands dead centre and stays aligned across every row.
  */
 function ActivityRow(props) {
-  const { activity, minutes, isHovered, isRunning, elapsedSeconds, takenSlots, isDragging, offset } = props;
+  const { activity, minutes, isHovered, isRunning, elapsedSeconds, takenSlots, isDragging, offset, inFolder } = props;
   const [editingHours, setEditingHours] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [pickingColor, setPickingColor] = useState(false);
@@ -331,7 +423,7 @@ function ActivityRow(props) {
   };
 
   return html`
-    <div class="row ${isHovered ? 'hovered' : ''} ${isDragging ? 'dragging' : ''}"
+    <div class="row ${isHovered ? 'hovered' : ''} ${isDragging ? 'dragging' : ''} ${inFolder ? 'in-folder' : ''}"
       style=${offset ? { transform: `translateY(${offset}px)` } : null}
       onMouseEnter=${() => props.onHover(true)} onMouseLeave=${() => props.onHover(false)}
       onDblClick=${props.onToggleTimer} onContextMenu=${onContextMenu}
@@ -375,6 +467,54 @@ function ActivityRow(props) {
         </button>
         <button class="btn" onClick=${() => props.onAdd(30)}>+30m</button>
         <button class="btn" onClick=${() => props.onAdd(60)}>+1h</button>
+        <${DragHandle} onDrag=${props.onDrag} onDragEnd=${props.onDragEnd} />
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * A folder's header: click it to hide or show the tasks beneath it. It has no colour or
+ * time of its own, so the total is its tasks' for the week and isn't editable.
+ */
+function FolderRow(props) {
+  const { folder, taskCount, minutes, isHovered, isDragging, isDropTarget, offset, runningSeconds } = props;
+  const [editingName, setEditingName] = useState(false);
+
+  const onContextMenu = async (e) => {
+    e.preventDefault();
+    const choice = await api.contextMenu([
+      { id: 'rename', label: 'Rename…' }, '-', { id: 'delete', label: 'Delete Folder (Keeps Its Tasks)' },
+    ]);
+    if (choice === 'rename') setEditingName(true);
+    if (choice === 'delete') props.onDelete();
+  };
+
+  return html`
+    <div class="row folder-row ${isHovered ? 'hovered' : ''} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}"
+      style=${offset ? { transform: `translateY(${offset}px)` } : null}
+      onMouseEnter=${() => props.onHover(true)} onMouseLeave=${() => props.onHover(false)}
+      onClick=${() => !editingName && props.onToggle()} onContextMenu=${onContextMenu}
+      title=${folder.collapsed ? 'Click to show its tasks' : 'Click to hide its tasks'}>
+
+      <div class="zone-name">
+        <span class="chevron ${folder.collapsed ? '' : 'open'}"><${Chevron} dir="right" size=${10} /></span>
+        <${FolderGlyph} />
+        ${editingName
+          ? html`<${InlineField} initial=${folder.name}
+              onCommit=${(v) => { const t = v.trim(); if (t) props.onRename(t); setEditingName(false); }}
+              onCancel=${() => setEditingName(false)} />`
+          : html`<span class="name folder-name">${folder.name}</span>`}
+        ${folder.collapsed && taskCount > 0 && html`<span class="count">${taskCount}</span>`}
+        <span class="spacer" />
+        ${runningSeconds != null && html`<span class="stopwatch num">${Duration.clock(runningSeconds)}</span>`}
+      </div>
+
+      <div class="zone-total">
+        <div class="total folder-total num ${minutes === 0 ? 'zero' : ''}">${Duration.format(minutes)}</div>
+      </div>
+
+      <div class="zone-controls" onClick=${stop}>
         <${DragHandle} onDrag=${props.onDrag} onDragEnd=${props.onDragEnd} />
       </div>
     </div>
@@ -460,37 +600,47 @@ function ColorSwatchPicker({ current, taken, onPick, onClose }) {
 }
 
 /** The inline `+` below the rows — a field you type into, never a dialog. */
-function AddActivityField({ onAdd }) {
-  const [expanded, setExpanded] = useState(false);
+/** The inline `+` below the rows. The folder button at its right end names a new folder. */
+function AddActivityField({ onAdd, onAddFolder }) {
+  const [mode, setMode] = useState(null); // 'activity' | 'folder' | null
   const [draft, setDraft] = useState('');
   const ref = useRef();
 
   useEffect(() => {
-    if (expanded) ref.current?.focus();
-  }, [expanded]);
+    if (mode) ref.current?.focus();
+  }, [mode]);
 
   const collapse = () => {
     setDraft('');
-    setExpanded(false);
+    setMode(null);
+  };
+
+  const commit = () => {
+    const t = draft.trim();
+    if (mode === 'folder') {
+      if (t) onAddFolder(t);
+      return collapse();
+    }
+    if (t) onAdd(t);
+    // Stay open — adding several in a row is the common case on first launch.
+    setDraft('');
   };
 
   return html`
-    <div class="add-field ${expanded ? 'expanded' : ''}" onClick=${() => setExpanded(true)}>
-      <${PlusCircle} />
-      ${expanded
-        ? html`<input ref=${ref} placeholder="New activity" value=${draft}
+    <div class="add-field ${mode ? 'expanded' : ''}" onClick=${() => !mode && setMode('activity')}>
+      ${mode === 'folder' ? html`<${FolderPlusGlyph} />` : html`<${PlusCircle} />`}
+      ${mode
+        ? html`<input ref=${ref} placeholder=${mode === 'folder' ? 'New folder' : 'New activity'} value=${draft}
             onInput=${(e) => setDraft(e.currentTarget.value)}
             onKeyDown=${(e) => {
-              if (e.key === 'Enter') {
-                const t = draft.trim();
-                if (t) onAdd(t);
-                // Stay open — adding several in a row is the common case on first launch.
-                setDraft('');
-              }
+              if (e.key === 'Enter') commit();
               if (e.key === 'Escape') collapse();
             }}
             onBlur=${() => !draft.trim() && collapse()} />`
-        : html`<span>new activity</span>`}
+        : html`<span>new activity</span>
+            <span class="spacer" />
+            <button class="add-folder" title="New folder"
+              onClick=${(e) => { e.stopPropagation(); setMode('folder'); }}><${FolderPlusGlyph} /></button>`}
     </div>
   `;
 }

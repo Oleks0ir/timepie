@@ -12,6 +12,7 @@ import Observation
 final class Store {
     private(set) var activities: [Activity] = []
     private(set) var entries: [Entry] = []
+    private(set) var folders: [Folder] = []
 
     private let fileURL: URL
     /// ⌘Z restores the previous state. Snapshots are uniform across every kind of
@@ -58,6 +59,7 @@ final class Store {
         else { return }
         activities = payload.activities
         entries = payload.entries
+        folders = payload.folders
 
         // One-time cleanup. "Delete" used to mean "archive", which hid the activity from
         // the rows while its time still counted toward the header total and the history
@@ -72,7 +74,7 @@ final class Store {
     }
 
     var payload: Payload {
-        Payload(activities: activities, entries: entries)
+        Payload(activities: activities, entries: entries, folders: folders)
     }
 
     private func save() {
@@ -92,6 +94,13 @@ final class Store {
         guard let previous = undoStack.popLast() else { return }
         activities = previous.activities
         entries = previous.entries
+        // Showing or hiding a folder's tasks isn't an edit, so undo leaves it alone.
+        let collapsed = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0.collapsed) })
+        folders = previous.folders.map { folder in
+            var folder = folder
+            folder.collapsed = collapsed[folder.id] ?? folder.collapsed
+            return folder
+        }
         save()
     }
 
@@ -111,6 +120,44 @@ final class Store {
             if let ended = $0.endWeekStart, ended <= weekStart { return false }
             return $0.firstWeekStart <= weekStart || logged.contains($0.id)
         }
+    }
+
+    /// The week's list as drawn: folders and loose tasks in order, each folder with the
+    /// tasks it holds that week. A folder shows from the week it was made, and in any
+    /// earlier week that has one of its tasks.
+    func outline(forWeek weekStart: Date) -> [OutlineItem] {
+        let tasks = activities(forWeek: weekStart)
+        let known = Set(folders.map(\.id))
+        let shown = folders.filter { folder in
+            folder.firstWeekStart <= weekStart || tasks.contains { $0.folderID == folder.id }
+        }
+        let items = shown.map { folder in
+            (folder.sortIndex, OutlineItem.folder(folder, tasks.filter { $0.folderID == folder.id }))
+        } + tasks.filter { !known.contains($0.folderID ?? UUID()) }.map {
+            ($0.sortIndex, OutlineItem.activity($0))
+        }
+        return items.sorted { $0.0 < $1.0 }.map(\.1)
+    }
+
+    /// One group of siblings in order: the top level (folders and loose tasks) when
+    /// `parent` is nil, otherwise that folder's tasks. With a week, only what it shows.
+    private func siblings(in parent: UUID?, week: Date?) -> [UUID] {
+        if let week {
+            let items = outline(forWeek: week)
+            guard let parent else { return items.map(\.id) }
+            for case let .folder(folder, tasks) in items where folder.id == parent {
+                return tasks.map(\.id)
+            }
+            return []
+        }
+        if let parent {
+            return visibleActivities.filter { $0.folderID == parent }.map(\.id)
+        }
+        let known = Set(folders.map(\.id))
+        let loose = visibleActivities.filter { !known.contains($0.folderID ?? UUID()) }
+        return (folders.map { ($0.sortIndex, $0.id) } + loose.map { ($0.sortIndex, $0.id) })
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
     }
 
     func entries(from start: Date, to end: Date) -> [Entry] {
@@ -162,13 +209,54 @@ final class Store {
             // Only colours on screen in this week are off the table, so older, unrelated
             // activities don't use up the eight slots forever.
             let taken = activities(forWeek: weekStart).map(\.colorSlot)
-            let nextIndex = (activities.map(\.sortIndex).max() ?? -1) + 1
             activities.append(Activity(
                 name: name,
                 colorSlot: Palette.nextSlot(taken: taken),
-                sortIndex: nextIndex,
+                sortIndex: nextSortIndex,
                 firstWeek: DayStamp.string(from: WeekMath.weekStart(for: weekStart))
             ))
+        }
+    }
+
+    /// New things go to the bottom of the list.
+    private var nextSortIndex: Int {
+        ((activities.map(\.sortIndex) + folders.map(\.sortIndex)).max() ?? -1) + 1
+    }
+
+    func addFolder(named name: String, inWeek weekStart: Date) {
+        mutate {
+            folders.append(Folder(
+                name: name,
+                sortIndex: nextSortIndex,
+                firstWeek: DayStamp.string(from: WeekMath.weekStart(for: weekStart))
+            ))
+        }
+    }
+
+    func renameFolder(_ id: UUID, to name: String) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        mutate { folders[i].name = name }
+    }
+
+    /// Hiding or showing a folder's tasks is a view preference, so it skips undo.
+    func setCollapsed(_ id: UUID, _ collapsed: Bool) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].collapsed = collapsed
+        save()
+    }
+
+    /// Deleting a folder keeps its tasks: they move out to the top level, in its place.
+    func deleteFolder(_ id: UUID) {
+        guard folders.contains(where: { $0.id == id }) else { return }
+        let tasks = siblings(in: id, week: nil)
+        var top = siblings(in: nil, week: nil)
+        if let i = top.firstIndex(of: id) { top.replaceSubrange(i...i, with: tasks) }
+        mutate {
+            folders.removeAll { $0.id == id }
+            for i in activities.indices where activities[i].folderID == id {
+                activities[i].folderID = nil
+            }
+            renumber(top)
         }
     }
 
@@ -203,27 +291,41 @@ final class Store {
         }
     }
 
-    /// Moves an activity to `destination` in one week's list. There is a single order
-    /// shared by every week, so the activity is placed beside the same neighbour in the
-    /// full list. Activities this week doesn't show keep their places.
-    func move(_ id: UUID, to destination: Int, inWeek weekStart: Date) {
-        var week = activities(forWeek: weekStart)
-        guard let from = week.firstIndex(where: { $0.id == id }) else { return }
-        let to = min(max(destination, 0), week.count - 1)
-        guard to != from else { return }
+    /// Moves a task or folder to `index` among what this week shows in `parent` — a
+    /// folder, or nil for the top level. Folders only live at the top level.
+    ///
+    /// There is a single order shared by every week, so the item is placed beside the
+    /// same neighbour in the full list. Items this week doesn't show keep their places.
+    func move(_ id: UUID, into parent: UUID?, at index: Int, inWeek weekStart: Date) {
+        let isFolder = folders.contains { $0.id == id }
+        guard isFolder || activities.contains(where: { $0.id == id }) else { return }
+        let parent = isFolder ? nil : parent
 
-        let moved = week.remove(at: from)
-        var all = visibleActivities.filter { $0.id != id }
-        let insertAt = to < week.count
-            ? all.firstIndex { $0.id == week[to].id } ?? all.count
-            : (all.firstIndex { $0.id == week[to - 1].id }).map { $0 + 1 } ?? all.count
-        all.insert(moved, at: insertAt)
+        let shown = siblings(in: parent, week: weekStart).filter { $0 != id }
+        var all = siblings(in: parent, week: nil).filter { $0 != id }
+        let k = min(max(index, 0), shown.count)
+        let at = k < shown.count
+            ? all.firstIndex(of: shown[k]) ?? all.count
+            : shown.last.flatMap { all.firstIndex(of: $0) }.map { $0 + 1 } ?? all.count
+        all.insert(id, at: at)
 
+        let currentParent = activities.first { $0.id == id }?.folderID
+        guard currentParent != parent || all != siblings(in: parent, week: nil) else { return }
         mutate {
-            for (index, activity) in all.enumerated() {
-                if let i = activities.firstIndex(where: { $0.id == activity.id }) {
-                    activities[i].sortIndex = index
-                }
+            if let i = activities.firstIndex(where: { $0.id == id }) {
+                activities[i].folderID = parent
+            }
+            renumber(all)
+        }
+    }
+
+    /// Sort indices only matter among siblings, so one group is renumbered at a time.
+    private func renumber(_ ids: [UUID]) {
+        for (n, id) in ids.enumerated() {
+            if let i = activities.firstIndex(where: { $0.id == id }) {
+                activities[i].sortIndex = n
+            } else if let i = folders.firstIndex(where: { $0.id == id }) {
+                folders[i].sortIndex = n
             }
         }
     }
