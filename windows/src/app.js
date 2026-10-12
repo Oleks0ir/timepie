@@ -44,6 +44,8 @@ function App() {
   // The day a click attributes to. Always inside the viewed week.
   const [loggingDay, setLoggingDay] = useState(() => W.startOfDay(new Date()));
   const [hoveredID, setHoveredID] = useState(null);
+  // The row being dragged by its handle: { id, from, offset, stride }.
+  const [drag, setDrag] = useState(null);
   // A running timer is deliberately *not* persisted: it dies with the app. Nothing is
   // written until you stop it, so a crash loses the session rather than inventing one.
   const [running, setRunning] = useState(null);
@@ -82,6 +84,30 @@ function App() {
   const minutesFor = (a) => store.minutes(a.id, viewedWeek, weekEnd);
   const weekTotal = store.totalMinutes(viewedWeek, weekEnd);
   const takenSlots = new Set(activities.map((a) => a.colorSlot));
+
+  /** The place the lifted row would take if dropped now. */
+  const dropIndex = (d) =>
+    Math.min(Math.max(d.from + Math.round(d.offset / d.stride), 0), activities.length - 1);
+
+  const displacement = (id, index) => {
+    if (!drag) return 0;
+    if (drag.id === id) return drag.offset;
+    const to = dropIndex(drag);
+    if (drag.from < to && index > drag.from && index <= to) return -drag.stride;
+    if (to < drag.from && index >= to && index < drag.from) return drag.stride;
+    return 0;
+  };
+
+  const dragRow = (id, index, dy, stride) => {
+    // Kept within the list, so the row can't be dragged off either end.
+    const offset = Math.min(Math.max(dy, -index * stride), (activities.length - 1 - index) * stride);
+    setDrag((d) => ({ id, from: d?.from ?? index, offset, stride }));
+  };
+
+  const endDrag = () => {
+    if (drag) store.move(drag.id, dropIndex(drag), viewedWeek);
+    setDrag(null);
+  };
 
   const stopTimer = () => {
     const timer = runningRef.current;
@@ -142,13 +168,17 @@ function App() {
         <${Donut} slices=${slices} size=${250} hoveredID=${hoveredID} onHover=${setHoveredID} animate />
       </div>
 
-      <div class="rows">
-        ${activities.map((a) => html`
+      <div class="rows ${drag ? 'reordering' : ''}">
+        ${activities.map((a, index) => html`
           <${ActivityRow}
             key=${a.id}
             activity=${a}
             minutes=${minutesFor(a)}
-            isHovered=${hoveredID === a.id}
+            isHovered=${drag ? drag.id === a.id : hoveredID === a.id}
+            isDragging=${drag?.id === a.id}
+            offset=${displacement(a.id, index)}
+            onDrag=${(dy, stride) => dragRow(a.id, index, dy, stride)}
+            onDragEnd=${endDrag}
             isRunning=${running?.activityID === a.id}
             elapsedSeconds=${running?.activityID === a.id ? Math.max(0, Math.floor((now - running.startedAt) / 1000)) : 0}
             takenSlots=${takenSlots}
@@ -288,7 +318,7 @@ function CenterFigure({ minutes, width }) {
  * total column lands dead centre and stays aligned across every row.
  */
 function ActivityRow(props) {
-  const { activity, minutes, isHovered, isRunning, elapsedSeconds, takenSlots } = props;
+  const { activity, minutes, isHovered, isRunning, elapsedSeconds, takenSlots, isDragging, offset } = props;
   const [editingHours, setEditingHours] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [pickingColor, setPickingColor] = useState(false);
@@ -301,7 +331,8 @@ function ActivityRow(props) {
   };
 
   return html`
-    <div class="row ${isHovered ? 'hovered' : ''}"
+    <div class="row ${isHovered ? 'hovered' : ''} ${isDragging ? 'dragging' : ''}"
+      style=${offset ? { transform: `translateY(${offset}px)` } : null}
       onMouseEnter=${() => props.onHover(true)} onMouseLeave=${() => props.onHover(false)}
       onDblClick=${props.onToggleTimer} onContextMenu=${onContextMenu}
       title=${isRunning ? 'Double-click to stop' : 'Double-click to start a timer'}>
@@ -344,9 +375,37 @@ function ActivityRow(props) {
         </button>
         <button class="btn" onClick=${() => props.onAdd(30)}>+30m</button>
         <button class="btn" onClick=${() => props.onAdd(60)}>+1h</button>
+        <${DragHandle} onDrag=${props.onDrag} onDragEnd=${props.onDragEnd} />
       </div>
     </div>
   `;
+}
+
+/** Three dots stacked vertically. Press and hold to drag the row up or down. */
+function DragHandle({ onDrag, onDragEnd }) {
+  const start = useRef(null);
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    // Captured, so the drag keeps going even when the pointer outruns the row.
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const row = e.currentTarget.closest('.row');
+    start.current = { y: e.clientY, stride: row.getBoundingClientRect().height + 2 };
+    onDrag(0, start.current.stride);
+  };
+  const onPointerMove = (e) => {
+    if (start.current) onDrag(e.clientY - start.current.y, start.current.stride);
+  };
+  const finish = () => {
+    if (!start.current) return;
+    start.current = null;
+    onDragEnd();
+  };
+  return html`<div class="grip" title="Drag to reorder"
+    onPointerDown=${onPointerDown} onPointerMove=${onPointerMove}
+    onPointerUp=${finish} onPointerCancel=${finish}>
+    <span /><span /><span />
+  </div>`;
 }
 
 /** A text field that commits on Enter or when you click away, and cancels on Esc. */

@@ -96,6 +96,22 @@ button { font: inherit; color: inherit; cursor: default; }
 
 .row { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-radius: 6px; }
 .row.hovered { background: var(--hover); }
+/* Lifted while dragged: an opaque backing hides the rows it passes over. */
+.row.dragging {
+  position: relative; z-index: 1;
+  background: linear-gradient(var(--hover), var(--hover)), var(--bg);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+/* The others slide aside. Off outside a drag, so dropping doesn't replay the slide. */
+.rows.reordering .row:not(.dragging) { transition: transform 150ms ease-out; }
+
+.grip {
+  width: 14px; height: 22px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2.5px;
+  color: var(--muted); cursor: grab; touch-action: none;
+}
+.grip span { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+.row.dragging .grip { color: var(--secondary); cursor: grabbing; }
 
 .zone-name { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 10px; position: relative; }
 .zone-total { flex: none; width: 96px; }

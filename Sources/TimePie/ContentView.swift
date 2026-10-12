@@ -10,6 +10,11 @@ struct ContentView: View {
     @State private var loggingDay = WeekMath.startOfDay(Date())
     @State private var hoveredID: UUID?
 
+    /// The row being dragged by its handle, and how far it has travelled.
+    @State private var drag: RowDrag?
+    /// One row's height plus the gap below it: how far a row moves per place.
+    @State private var rowStride: CGFloat = 30
+
     /// A running timer, deliberately *not* persisted: it dies with the app. Nothing is
     /// written until you stop it, so a crash loses the session rather than inventing one.
     @State private var running: RunningTimer?
@@ -26,6 +31,12 @@ struct ContentView: View {
         /// The day the timer *started* — a session running past midnight stays put
         /// rather than jumping into the next day, or the next week.
         let day: Date
+    }
+
+    private struct RowDrag {
+        let id: UUID
+        let from: Int
+        var offset: CGFloat
     }
 
     private var weekEnd: Date { WeekMath.weekEnd(for: viewedWeek) }
@@ -126,13 +137,17 @@ struct ContentView: View {
     // MARK: - Rows
 
     private var rows: some View {
-        VStack(spacing: 2) {
-            ForEach(activities) { activity in
+        VStack(spacing: rowSpacing) {
+            ForEach(Array(activities.enumerated()), id: \.element.id) { index, activity in
+                let isDragged = drag?.id == activity.id
                 ActivityRow(
                     name: activity.name,
                     colorSlot: activity.colorSlot,
                     minutes: minutes(for: activity),
-                    isHovered: hoveredID == activity.id,
+                    // While dragging, the highlight stays on the lifted row rather
+                    // than flickering across the rows it passes.
+                    isHovered: drag.map { $0.id == activity.id } ?? (hoveredID == activity.id),
+                    isDragging: isDragged,
                     isRunning: running?.activityID == activity.id,
                     elapsedSeconds: elapsedSeconds(for: activity.id),
                     takenSlots: Set(activities.map(\.colorSlot)),
@@ -148,14 +163,61 @@ struct ContentView: View {
                         // Don't leave a timer running against something that's gone.
                         if running?.activityID == activity.id { running = nil }
                         store.delete(activity.id, fromWeek: viewedWeek)
-                    }
+                    },
+                    onDragChanged: { dragRow(activity.id, at: index, by: $0) },
+                    onDragEnded: endDrag
                 )
                 .onHover { hoveredID = $0 ? activity.id : nil }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    rowStride = $0 + rowSpacing
+                }
+                .offset(y: displacement(of: activity.id, at: index))
+                .zIndex(isDragged ? 1 : 0)
+                // The lifted row tracks the cursor exactly; the others slide aside.
+                .animation(isDragged ? nil : .easeOut(duration: 0.15),
+                           value: drag.map(dropIndex))
             }
 
             AddActivityField(onAdd: { store.addActivity(named: $0, inWeek: viewedWeek) })
         }
         .padding(.horizontal, 16)
+    }
+
+    // MARK: - Reordering
+
+    private let rowSpacing: CGFloat = 2
+
+    private func dragRow(_ id: UUID, at index: Int, by translation: CGFloat) {
+        // Kept within the list, so the row can't be dragged off either end.
+        let lowest = -CGFloat(index) * rowStride
+        let highest = CGFloat(activities.count - 1 - index) * rowStride
+        drag = RowDrag(id: id, from: drag?.from ?? index,
+                       offset: min(max(translation, lowest), highest))
+    }
+
+    /// The place the lifted row would take if dropped now.
+    private func dropIndex(for drag: RowDrag) -> Int {
+        let shift = Int((drag.offset / rowStride).rounded())
+        return min(max(drag.from + shift, 0), activities.count - 1)
+    }
+
+    private func displacement(of id: UUID, at index: Int) -> CGFloat {
+        guard let drag else { return 0 }
+        if drag.id == id { return drag.offset }
+        let to = dropIndex(for: drag)
+        if drag.from < to, index > drag.from, index <= to { return -rowStride }
+        if to < drag.from, index >= to, index < drag.from { return rowStride }
+        return 0
+    }
+
+    private func endDrag() {
+        guard let finished = drag else { return }
+        // Moving the row and clearing its offset in one animated step means the
+        // rows that slid aside stay put; only the lifted one settles into its slot.
+        withAnimation(.easeOut(duration: 0.15)) {
+            store.move(finished.id, to: dropIndex(for: finished), inWeek: viewedWeek)
+            drag = nil
+        }
     }
 
     // MARK: - The timer

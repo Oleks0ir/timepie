@@ -203,11 +203,24 @@ final class Store {
         }
     }
 
-    func move(fromOffsets source: IndexSet, toOffset destination: Int) {
+    /// Moves an activity to `destination` in one week's list. There is a single order
+    /// shared by every week, so the activity is placed beside the same neighbour in the
+    /// full list. Activities this week doesn't show keep their places.
+    func move(_ id: UUID, to destination: Int, inWeek weekStart: Date) {
+        var week = activities(forWeek: weekStart)
+        guard let from = week.firstIndex(where: { $0.id == id }) else { return }
+        let to = min(max(destination, 0), week.count - 1)
+        guard to != from else { return }
+
+        let moved = week.remove(at: from)
+        var all = visibleActivities.filter { $0.id != id }
+        let insertAt = to < week.count
+            ? all.firstIndex { $0.id == week[to].id } ?? all.count
+            : (all.firstIndex { $0.id == week[to - 1].id }).map { $0 + 1 } ?? all.count
+        all.insert(moved, at: insertAt)
+
         mutate {
-            var visible = visibleActivities
-            visible.move(fromOffsets: source, toOffset: destination)
-            for (index, activity) in visible.enumerated() {
+            for (index, activity) in all.enumerated() {
                 if let i = activities.firstIndex(where: { $0.id == activity.id }) {
                     activities[i].sortIndex = index
                 }

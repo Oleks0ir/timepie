@@ -10,6 +10,8 @@ struct ActivityRow: View {
     let colorSlot: Int
     let minutes: Int
     let isHovered: Bool
+    /// Lifted off the list while its handle is being dragged.
+    let isDragging: Bool
 
     /// Live timer state. It lives only as long as the app does, so nothing here is persisted.
     let isRunning: Bool
@@ -26,6 +28,9 @@ struct ActivityRow: View {
     let onSetColor: (Int) -> Void
     let onRename: (String) -> Void
     let onDelete: () -> Void
+    /// Vertical distance the handle has been dragged since it was pressed.
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: () -> Void
 
     @State private var editingHours = false
     @State private var hoursDraft = ""
@@ -51,6 +56,13 @@ struct ActivityRow: View {
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isHovered ? Color.primary.opacity(0.06) : .clear)
+        )
+        // While lifted, an opaque backing hides the rows it passes over.
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Ink.background)
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+                .opacity(isDragging ? 1 : 0)
         )
         // Double-click anywhere on the row to start or stop its timer. Renaming moved
         // to the right-click menu because the old double-click-the-name gesture would
@@ -155,7 +167,30 @@ struct ActivityRow: View {
             Button("+1h") { onAdd(60) }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+
+            dragHandle
         }
+    }
+
+    /// Three dots stacked vertically. Press and hold to drag the row up or down.
+    private var dragHandle: some View {
+        VStack(spacing: 2.5) {
+            ForEach(0..<3, id: \.self) { _ in
+                Circle().frame(width: 3, height: 3)
+            }
+        }
+        .foregroundStyle(isDragging ? Ink.secondary : Ink.muted)
+        .frame(width: 14, height: 22)
+        .contentShape(Rectangle())
+        .modifier(GrabCursor(active: isDragging))
+        // Measured in the window's space: the handle moves with the row, so its own
+        // coordinates would shift under the cursor while dragging.
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { onDragChanged($0.translation.height) }
+                .onEnded { _ in onDragEnded() }
+        )
+        .help("Drag to reorder")
     }
 
     // MARK: - Commits
@@ -174,6 +209,19 @@ struct ActivityRow: View {
         let trimmed = nameDraft.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { onRename(trimmed) }
         editingName = false
+    }
+}
+
+/// An open hand over the handle, closed while dragging. The pointer API is macOS 15+.
+private struct GrabCursor: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.pointerStyle(active ? .grabActive : .grabIdle)
+        } else {
+            content
+        }
     }
 }
 

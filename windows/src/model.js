@@ -266,6 +266,31 @@ export class Store {
     this.#update(id, { name });
   }
 
+  /**
+   * Moves an activity to `to` in one week's list. There is a single order shared by
+   * every week, so it is placed beside the same neighbour in the full list. Activities
+   * this week doesn't show keep their places.
+   */
+  move(id, to, inWeek) {
+    const week = this.activitiesForWeek(weekStart(inWeek));
+    const from = week.findIndex((a) => a.id === id);
+    if (from < 0) return;
+    to = Math.min(Math.max(to, 0), week.length - 1);
+    if (to === from) return;
+
+    const [moved] = week.splice(from, 1);
+    const all = this.visibleActivities.filter((a) => a.id !== id);
+    const at = to < week.length
+      ? all.findIndex((a) => a.id === week[to].id)
+      : all.findIndex((a) => a.id === week[to - 1].id) + 1;
+    all.splice(at, 0, moved);
+
+    const order = new Map(all.map((a, i) => [a.id, i]));
+    this.#mutate(() => {
+      this.activities = this.activities.map((a) => (order.has(a.id) ? { ...a, sortIndex: order.get(a.id) } : a));
+    });
+  }
+
   #firstWeekStart(a) {
     return weekStart(a.firstWeek ? DayStamp.parse(a.firstWeek) : new Date(a.createdAt));
   }
