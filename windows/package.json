@@ -1,0 +1,18 @@
+{
+  "name": "timepie",
+  "productName": "TimePie",
+  "version": "1.0.0",
+  "description": "TimePie — a weekly time donut",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:win": "./build-windows.sh"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.6.0",
+    "htm": "^3.1.1",
+    "preact": "^11.0.0"
+  }
+}
