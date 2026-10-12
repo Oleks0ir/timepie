@@ -9,6 +9,7 @@ struct ContentView: View {
     /// The day a click attributes to. Always inside the viewed week.
     @State private var loggingDay = WeekMath.startOfDay(Date())
     @State private var hoveredID: UUID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The row being dragged by its handle, and how far it has travelled.
     @State private var drag: RowDrag?
@@ -179,6 +180,12 @@ struct ContentView: View {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 let isDragged = drag?.id == row.id
                 rowView(row, at: index)
+                    // Picked up on press: the row rises a touch before it moves.
+                    .scaleEffect(isDragged && !reduceMotion ? 1.02 : 1)
+                    .animation(motion(Motion.snappy), value: isDragged)
+                    // A folder's tasks drop out of it when it opens and fold back up
+                    // into it when it closes — the same path both ways.
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -8)))
                     .onHover { hoveredID = $0 ? row.id : nil }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                         rowStride = $0 + RowMetrics.spacing
@@ -186,7 +193,7 @@ struct ContentView: View {
                     .offset(y: displacement(at: index))
                     .zIndex(isDragged ? 1 : 0)
                     // The lifted row tracks the cursor exactly; the others slide aside.
-                    .animation(isDragged ? nil : .easeOut(duration: 0.15), value: drag?.slot)
+                    .animation(isDragged ? nil : motion(Motion.snappy), value: drag?.slot)
             }
 
             AddActivityField(
@@ -194,6 +201,10 @@ struct ContentView: View {
                 onAddFolder: { store.addFolder(named: $0, inWeek: viewedWeek) }
             )
         }
+        // A tick on the trackpad as the lifted row snaps into each new place, and a
+        // firmer one when it's held over a folder it would drop into.
+        .sensoryFeedback(.alignment, trigger: drag?.slot) { old, new in old != nil && new != nil }
+        .sensoryFeedback(.levelChange, trigger: drag?.into) { _, new in new != nil }
         .padding(6)
         // An inset grouped card, as in System Settings.
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
@@ -221,12 +232,12 @@ struct ContentView: View {
                     ? tasks.first { $0.id == running?.activityID }.map { elapsedSeconds(for: $0.id) }
                     : nil,
                 onToggle: {
-                    withAnimation(.easeOut(duration: 0.15)) {
+                    withAnimation(motion(Motion.snappy)) {
                         store.setCollapsed(folder.id, !folder.collapsed)
                     }
                 },
                 onRename: { store.renameFolder(folder.id, to: $0) },
-                onDelete: { withAnimation(.easeOut(duration: 0.15)) { store.deleteFolder(folder.id) } },
+                onDelete: { withAnimation(motion(Motion.snappy)) { store.deleteFolder(folder.id) } },
                 onDragChanged: { dragRow(folder.id, isFolder: true, at: index, by: $0) },
                 onDragEnded: endDrag
             )
@@ -244,7 +255,11 @@ struct ContentView: View {
                 isRunning: running?.activityID == activity.id,
                 elapsedSeconds: elapsedSeconds(for: activity.id),
                 takenSlots: Set(activities.map(\.colorSlot)),
-                onAdd: { store.add(minutes: $0, to: activity.id, on: loggingDay) },
+                onAdd: { minutes in
+                    withAnimation(motion(Motion.snappy)) {
+                        store.add(minutes: minutes, to: activity.id, on: loggingDay)
+                    }
+                },
                 onSetTotal: {
                     store.setTotal($0, for: activity.id,
                                    weekStart: viewedWeek, weekEnd: weekEnd, on: loggingDay)
@@ -269,12 +284,28 @@ struct ContentView: View {
         var lifted = drag ?? RowDrag(id: id, isFolder: isFolder, from: index,
                                      offset: 0, slot: index, into: nil)
         let others = visibleRows(hidingTasksOf: id).filter { $0.id != id }
-        // Kept within the list, so the row can't be dragged off either end.
         let lowest = -CGFloat(lifted.from) * rowStride
         let highest = CGFloat(others.count - lifted.from) * rowStride
-        lifted.offset = min(max(translation, lowest), highest)
+        lifted.offset = rubberBand(translation, lower: lowest, upper: highest)
         settle(&lifted, among: others)
         drag = lifted
+    }
+
+    /// Past either end of the list the row follows less and less instead of stopping
+    /// dead, so the list reads as having an edge rather than freezing. It springs back
+    /// on release.
+    private func rubberBand(_ x: CGFloat, lower: CGFloat, upper: CGFloat) -> CGFloat {
+        let span = rowStride * 2
+        let c: CGFloat = 0.55
+        func resist(_ over: CGFloat) -> CGFloat { over * span * c / (span + c * over) }
+        if x < lower { return lower - resist(lower - x) }
+        if x > upper { return upper + resist(x - upper) }
+        return x
+    }
+
+    /// The spring to use, or a plain cross-fade under Reduce Motion.
+    private func motion(_ spring: Animation) -> Animation {
+        reduceMotion ? Motion.reduced : spring
     }
 
     /// Moves the gap to follow the lifted row, a place at a time once it covers more
@@ -337,7 +368,7 @@ struct ContentView: View {
         let target = dropTarget(of: finished)
         // Moving the row and clearing its offset in one animated step means the
         // rows that slid aside stay put; only the lifted one settles into its slot.
-        withAnimation(.easeOut(duration: 0.15)) {
+        withAnimation(motion(Motion.settle)) {
             store.move(finished.id, into: target.parent, at: target.index, inWeek: viewedWeek)
             drag = nil
         }

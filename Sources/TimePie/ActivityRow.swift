@@ -135,6 +135,8 @@ struct ActivityRow: View {
         } else {
             Text(Duration.format(minutes: minutes))
                 .monospacedDigit()
+                // Rolls to the new value when time is added, so the click visibly lands.
+                .contentTransition(.numericText(value: Double(minutes)))
                 .foregroundStyle(minutes == 0 ? Ink.muted : Ink.secondary)
                 .frame(maxWidth: .infinity, minHeight: 22)
                 // Without this the number gives no sign it can be typed into.

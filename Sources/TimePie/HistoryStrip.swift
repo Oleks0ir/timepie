@@ -9,6 +9,7 @@ struct HistoryStrip: View {
     let onSelect: (Date) -> Void
 
     @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     struct WeekThumb: Identifiable {
         let id: Date          // week start
@@ -20,7 +21,7 @@ struct HistoryStrip: View {
     var body: some View {
         VStack(spacing: 0) {
             Button {
-                withAnimation(.snappy(duration: 0.25)) { expanded.toggle() }
+                withAnimation(reduceMotion ? Motion.reduced : Motion.snappy) { expanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")

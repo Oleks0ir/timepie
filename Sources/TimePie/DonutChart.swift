@@ -77,8 +77,8 @@ struct DonutChart: View {
             .opacity(hoveredID == nil || lifted ? 1 : 0.4)
         }
         .chartLegend(.hidden)
-        .animation(.easeInOut(duration: 0.35), value: slices)
-        .animation(.easeOut(duration: 0.15), value: hoveredID)
+        .animation(Motion.chart, value: slices)
+        .animation(Motion.snappy, value: hoveredID)
     }
 
     /// The one number the app leads with — or, while a slice is hovered, that slice's.
@@ -99,7 +99,7 @@ struct DonutChart: View {
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
-        .animation(.easeOut(duration: 0.15), value: hoveredID)
+        .animation(Motion.snappy, value: hoveredID)
     }
 
     private func percent(_ slice: Slice) -> String {

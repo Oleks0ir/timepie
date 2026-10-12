@@ -74,6 +74,20 @@ extension Ink {
     })
 }
 
+/// Springs, after Apple's fluid-interface guidance: critically damped by default, so
+/// nothing overshoots, and interruptible, so a gesture can redirect anything mid-flight.
+enum Motion {
+    /// State changes: rows sliding aside, folders opening, hover.
+    static let snappy = Animation.spring(response: 0.28, dampingFraction: 1)
+    /// A dragged row landing in its slot — the one place a little bounce is earned,
+    /// because a hand just threw it there.
+    static let settle = Animation.spring(response: 0.32, dampingFraction: 0.82)
+    /// Wedges growing when time is added.
+    static let chart = Animation.spring(response: 0.45, dampingFraction: 1)
+    /// What Reduce Motion gets instead: a short cross-fade, no travel or bounce.
+    static let reduced = Animation.easeInOut(duration: 0.2)
+}
+
 extension View {
     /// Liquid Glass on macOS 26, and the frosted material it replaced before that.
     @ViewBuilder

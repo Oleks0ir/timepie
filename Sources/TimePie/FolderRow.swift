@@ -32,6 +32,7 @@ struct FolderRow: View {
 
             Text(Duration.format(minutes: minutes))
                 .monospacedDigit()
+                .contentTransition(.numericText(value: Double(minutes)))
                 .foregroundStyle(minutes == 0 ? Ink.muted : Ink.secondary)
                 .frame(width: RowMetrics.totalColumnWidth, height: 22)
 
