@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One activity: identity carried by the colour dot, everything else in ink.
@@ -68,8 +69,12 @@ struct ActivityRow: View {
         // Double-click anywhere on the row to start or stop its timer. Renaming moved
         // to the right-click menu because the old double-click-the-name gesture would
         // have collided with this one.
+        //
+        // This is a single-tap gesture that reads AppKit's click count rather than
+        // `onTapGesture(count: 2)`: a double-tap gesture on the row makes every button
+        // inside it wait out the double-click interval before it fires.
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { onToggleTimer() }
+        .onTapGesture { if NSApp.currentEvent?.clickCount == 2 { onToggleTimer() } }
         .help(isRunning ? "Double-click to stop" : "Double-click to start a timer")
         .contextMenu {
             Button("Rename…") { nameDraft = name; editingName = true }
@@ -145,9 +150,8 @@ struct ActivityRow: View {
                         .fill(isHovered ? Color.primary.opacity(0.09) : .clear)
                 )
                 .contentShape(Rectangle())
-                // Both counts are claimed here so a double-click on the total edits it
-                // instead of falling through to the row's start/stop-the-timer gesture.
-                .onTapGesture(count: 2) { beginEditingHours() }
+                // Claimed here so a click on the total edits it instead of falling
+                // through to the row's start/stop-the-timer gesture.
                 .onTapGesture { beginEditingHours() }
                 .help("Click to type this week's total — 1h45, 90, 1.5h, 2h")
         }
