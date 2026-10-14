@@ -105,6 +105,10 @@ struct ContentView: View {
             .padding(.bottom, 20)
         }
         .scrollBounceBehavior(.basedOnSize)
+        // Clicking the background ends any inline edit: focus goes back to the window.
+        .contentShape(Rectangle())
+        .onTapGesture { rootFocused = true }
+        .environment(\.endEditing) { rootFocused = true }
         // History floats on glass over the bottom of the list, which scrolls under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HistoryStrip(

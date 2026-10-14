@@ -24,6 +24,8 @@ struct FolderRow: View {
 
     @State private var editingName = false
     @State private var nameDraft = ""
+    @FocusState private var nameFocused: Bool
+    @Environment(\.endEditing) private var endEditing
 
     var body: some View {
         HStack(spacing: 10) {
@@ -47,7 +49,10 @@ struct FolderRow: View {
                 .strokeBorder(Color.accentColor.opacity(isDropTarget ? 0.8 : 0), lineWidth: 1.5)
         )
         .contentShape(Rectangle())
-        .onTapGesture { if !editingName { onToggle() } }
+        .onTapGesture {
+            // Guarded so a click into the rename field can't close it.
+            if !editingName { endEditing(); onToggle() }
+        }
         .help(isCollapsed ? "Click to show its tasks" : "Click to hide its tasks")
         .contextMenu {
             Button("Rename…") { nameDraft = name; editingName = true }
@@ -72,8 +77,14 @@ struct FolderRow: View {
                 TextField("", text: $nameDraft)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 160)
+                    .focused($nameFocused)
+                    .onAppear { nameFocused = true }
                     .onSubmit(commitName)
                     .onExitCommand { editingName = false }
+                    // Clicking anywhere else keeps what was typed, like renaming in Finder.
+                    .onChange(of: nameFocused) { _, focused in
+                        if !focused && editingName { commitName() }
+                    }
             } else {
                 Text(name)
                     .fontWeight(.medium)

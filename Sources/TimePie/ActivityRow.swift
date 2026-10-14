@@ -40,6 +40,9 @@ struct ActivityRow: View {
     @State private var editingName = false
     @State private var nameDraft = ""
     @State private var pickingColor = false
+    @FocusState private var hoursFocused: Bool
+    @FocusState private var nameFocused: Bool
+    @Environment(\.endEditing) private var endEditing
 
     var body: some View {
         HStack(spacing: 10) {
@@ -74,7 +77,14 @@ struct ActivityRow: View {
         // `onTapGesture(count: 2)`: a double-tap gesture on the row makes every button
         // inside it wait out the double-click interval before it fires.
         .contentShape(Rectangle())
-        .onTapGesture { if NSApp.currentEvent?.clickCount == 2 { onToggleTimer() } }
+        .onTapGesture {
+            if NSApp.currentEvent?.clickCount == 2 {
+                onToggleTimer()
+            } else if !editingHours && !editingName {
+                // Guarded so a click into this row's own field can't close it.
+                endEditing()
+            }
+        }
         .help(isRunning ? "Double-click to stop" : "Double-click to start a timer")
         .contextMenu {
             Button("Rename…") { nameDraft = name; editingName = true }
@@ -107,8 +117,14 @@ struct ActivityRow: View {
                 TextField("", text: $nameDraft)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 160)
+                    .focused($nameFocused)
+                    .onAppear { nameFocused = true }
                     .onSubmit(commitName)
                     .onExitCommand { editingName = false }
+                    // Clicking anywhere else keeps what was typed, like renaming in Finder.
+                    .onChange(of: nameFocused) { _, focused in
+                        if !focused && editingName { commitName() }
+                    }
             } else {
                 Text(name)
                     .foregroundStyle(Ink.primary)
@@ -135,8 +151,14 @@ struct ActivityRow: View {
             TextField("", text: $hoursDraft)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.center)
+                .focused($hoursFocused)
+                .onAppear { hoursFocused = true }
                 .onSubmit(commitHours)
                 .onExitCommand { editingHours = false }
+                // Clicking anywhere else keeps what was typed; Escape throws it away.
+                .onChange(of: hoursFocused) { _, focused in
+                    if !focused && editingHours { commitHours() }
+                }
         } else {
             Text(Duration.format(minutes: minutes))
                 .monospacedDigit()
@@ -199,6 +221,19 @@ struct ActivityRow: View {
         let trimmed = nameDraft.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { onRename(trimmed) }
         editingName = false
+    }
+}
+
+private struct EndEditingKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    /// Ends whatever inline edit is open by handing keyboard focus back to the window.
+    /// Rows call it on a plain click, so clicking a row works like clicking the background.
+    var endEditing: () -> Void {
+        get { self[EndEditingKey.self] }
+        set { self[EndEditingKey.self] = newValue }
     }
 }
 
@@ -347,6 +382,10 @@ struct AddActivityField: View {
                     .focused($focused)
                     .onSubmit(commit)
                     .onExitCommand { collapse() }
+                    // Clicking away from an empty field closes it; typed text is kept.
+                    .onChange(of: focused) { _, isFocused in
+                        if !isFocused && draft.isEmpty { collapse() }
+                    }
             } else {
                 Text("New Activity")
                     .foregroundStyle(.secondary)
