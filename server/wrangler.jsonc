@@ -1,0 +1,12 @@
+{
+  "name": "timepie-friends",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "timepie-friends",
+      "database_id": "9db4a8c4-3cad-4cca-aa65-2d2ef9804c4a"
+    }
+  ]
+}

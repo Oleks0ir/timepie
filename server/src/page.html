@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TimePie Leaderboard</title>
+  <style>
+    /* The app's palette and chrome, so the page reads as the same thing. */
+    :root {
+      color-scheme: light dark;
+      --bg: #E2E2E2;
+      --card: rgba(255, 255, 255, 0.5);
+      --primary: rgba(0, 0, 0, 0.85);
+      --secondary: rgba(0, 0, 0, 0.5);
+      --muted: #898781;
+      --hover: rgba(0, 0, 0, 0.05);
+      --divider: rgba(0, 0, 0, 0.08);
+      --gold: #c98500;
+      --c0: #2a78d6; --c1: #eb6834; --c2: #1baf7a; --c3: #eda100;
+      --c4: #e87ba4; --c5: #008300; --c6: #4a3aa7; --c7: #e34948;
+      --c8: #898781;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #171717;
+        --card: rgba(255, 255, 255, 0.05);
+        --primary: rgba(255, 255, 255, 0.86);
+        --secondary: rgba(255, 255, 255, 0.55);
+        --hover: rgba(255, 255, 255, 0.05);
+        --divider: rgba(255, 255, 255, 0.08);
+        --c0: #3987e5; --c1: #d95926; --c2: #199e70; --c3: #c98500;
+        --c4: #d55181; --c5: #008300; --c6: #9085e9; --c7: #e66767;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--primary);
+      font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    main { max-width: 520px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 13px; font-weight: 600; color: var(--muted); text-align: center; margin: 0 0 4px; letter-spacing: 0.04em; }
+    .week { display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 18px; }
+    .week .label { font-weight: 600; min-width: 130px; text-align: center; }
+    .chev {
+      width: 34px; height: 34px; border: 0; border-radius: 8px; background: none; color: var(--muted);
+      display: grid; place-items: center; cursor: pointer;
+    }
+    .chev:hover { background: var(--hover); }
+    .card { background: var(--card); border-radius: 14px; padding: 6px; }
+    .row { border-radius: 9px; }
+    .row + .row { margin-top: 2px; }
+    .summary {
+      width: 100%; display: flex; align-items: center; gap: 12px; padding: 8px 10px;
+      border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 9px;
+    }
+    .summary:hover { background: var(--hover); }
+    .rank { width: 18px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+    .rank.first { color: var(--gold); font-weight: 700; }
+    .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .total { font-variant-numeric: tabular-nums; color: var(--secondary); }
+    .zero .total, .zero .name { color: var(--muted); }
+    .detail { display: flex; gap: 18px; align-items: center; padding: 6px 12px 14px 40px; flex-wrap: wrap; }
+    .slices { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+    .slice { display: flex; align-items: center; gap: 8px; }
+    .slice .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .slice .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .slice .m { color: var(--secondary); font-variant-numeric: tabular-nums; }
+    .slice .hidden { color: var(--muted); font-style: italic; }
+    .note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; }
+    .empty { text-align: center; color: var(--muted); padding: 28px 12px; }
+    svg { display: block; flex: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">TIMEPIE</h1>
+    <div class="week">
+      <button class="chev" id="prev" aria-label="Previous week">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 L4 6 L8 10"/></svg>
+      </button>
+      <span class="label" id="week"></span>
+      <button class="chev" id="next" aria-label="Next week">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2 L8 6 L4 10"/></svg>
+      </button>
+    </div>
+    <div class="card" id="board"><div class="empty">Loading…</div></div>
+    <p class="note" id="note"></p>
+  </main>
+  <script>
+    const code = location.pathname.split('/').filter(Boolean)[1].toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const board = document.getElementById('board');
+    let members = null;
+    let week = mondayOf(new Date());
+    const open = new Set();
+
+    document.getElementById('title').textContent = 'TIMEPIE · ' + code.slice(0, 3) + '-' + code.slice(3);
+
+    function mondayOf(d) {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+      return x;
+    }
+    const addDays = (n, d) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+
+    function weekLabel(start) {
+      const end = addDays(6, start);
+      const m = (d) => d.toLocaleDateString(undefined, { month: 'short' });
+      return start.getMonth() === end.getMonth()
+        ? m(start) + ' ' + start.getDate() + ' – ' + end.getDate()
+        : m(start) + ' ' + start.getDate() + ' – ' + m(end) + ' ' + end.getDate();
+    }
+
+    function duration(minutes) {
+      const m = Math.max(0, minutes), h = Math.floor(m / 60), r = m % 60;
+      if (h === 0) return r + 'm';
+      return r === 0 ? h + 'h' : h + 'h ' + r + 'm';
+    }
+
+    const color = (slot) => 'var(--c' + (slot >= 0 && slot < 8 ? slot : 8) + ')';
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+    function donut(slices, size) {
+      const total = slices.reduce((s, x) => s + x.minutes, 0);
+      const ring = size * 0.3, r = size / 2 - ring / 2, c = size / 2;
+      if (total === 0) {
+        return '<svg width="' + size + '" height="' + size + '"><circle cx="' + c + '" cy="' + c + '" r="' + r +
+          '" fill="none" stroke="var(--muted)" stroke-opacity="0.3" stroke-width="' + ring + '"/></svg>';
+      }
+      let a = -Math.PI / 2, paths = '';
+      const pt = (t) => (c + r * Math.cos(t)).toFixed(2) + ' ' + (c + r * Math.sin(t)).toFixed(2);
+      for (const s of slices) {
+        if (s.minutes <= 0) continue;
+        const sweep = s.minutes / total * 2 * Math.PI, mid = a + sweep / 2, b = a + sweep;
+        paths += '<path d="M ' + pt(a) + ' A ' + r + ' ' + r + ' 0 0 1 ' + pt(mid) + ' A ' + r + ' ' + r + ' 0 0 1 ' + pt(b) +
+          '" fill="none" stroke="' + color(s.colorSlot) + '" stroke-width="' + ring + '"/>';
+        a = b;
+      }
+      return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' + paths + '</svg>';
+    }
+
+    function render() {
+      document.getElementById('week').textContent = weekLabel(week);
+      if (!members) return;
+      const key = stamp(week);
+      const ranked = members
+        .map((m) => ({ ...m, w: m.weeks.find((w) => w.week === key) ?? { total: 0, slices: [] } }))
+        .sort((x, y) => y.w.total - x.w.total || x.name.localeCompare(y.name));
+      if (!ranked.length) {
+        board.innerHTML = '<div class="empty">Nobody has joined yet.</div>';
+        return;
+      }
+      let place = 0, last = null;
+      board.innerHTML = ranked.map((m, i) => {
+        // Equal totals share a place.
+        if (m.w.total !== last) { place = i + 1; last = m.w.total; }
+        const zero = m.w.total === 0;
+        const rows = m.w.slices.slice().sort((x, y) => y.minutes - x.minutes).map((s) =>
+          '<div class="slice"><span class="dot" style="background:' + color(s.colorSlot) + '"></span>' +
+          (s.name == null ? '<span class="n hidden">Hidden</span>' : '<span class="n">' + esc(s.name) + '</span>') +
+          '<span class="m">' + duration(s.minutes) + '</span></div>').join('');
+        return '<div class="row ' + (zero ? 'zero' : '') + '">' +
+          '<button class="summary" data-id="' + m.id + '">' +
+          '<span class="rank ' + (place === 1 && !zero ? 'first' : '') + '">' + (zero ? '–' : place) + '</span>' +
+          donut(m.w.slices, 26) +
+          '<span class="name">' + esc(m.name) + '</span>' +
+          '<span class="total">' + duration(m.w.total) + '</span></button>' +
+          (open.has(m.id) && !zero ? '<div class="detail">' + donut(m.w.slices, 110) + '<div class="slices">' + rows + '</div></div>' : '') +
+          '</div>';
+      }).join('');
+    }
+
+    board.addEventListener('click', (e) => {
+      const id = e.target.closest('.summary')?.dataset.id;
+      if (!id) return;
+      open.has(id) ? open.delete(id) : open.add(id);
+      render();
+    });
+    document.getElementById('prev').onclick = () => { week = addDays(-7, week); render(); };
+    document.getElementById('next').onclick = () => { week = addDays(7, week); render(); };
+
+    async function load() {
+      try {
+        const res = await fetch('/api/groups/' + code, { cache: 'no-store' });
+        if (res.status === 404) {
+          board.innerHTML = '<div class="empty">No group has the code ' + esc(code) + '.</div>';
+          return;
+        }
+        members = (await res.json()).members;
+        document.getElementById('note').textContent =
+          members.length + (members.length === 1 ? ' person' : ' people') + ' · updates every minute';
+        render();
+      } catch {
+        document.getElementById('note').textContent = 'Couldn’t reach the server. Retrying…';
+      }
+    }
+
+    render();
+    load();
+    setInterval(load, 60000);
+  </script>
+</body>
+</html>

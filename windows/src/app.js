@@ -1,11 +1,17 @@
 // Port of ContentView, ActivityRow, DonutChart and HistoryStrip.
 import { html, render, useState, useEffect, useLayoutEffect, useRef } from './vendor/preact-htm.js';
 import * as W from './model.js';
+import { Friends, displayCode } from './friends.js';
 
 const { Duration, SLOT_COUNT } = W;
 const api = window.timepie;
 
 const store = new W.Store(await api.load(), (json) => api.save(json));
+const friends = new Friends(await api.loadFriends(), (json) => api.saveFriends(json));
+
+// Every change goes out to the group, if you're in one.
+friends.storeChanged(store, 0, true);
+store.subscribe(() => friends.storeChanged(store));
 
 // Ctrl+Z: text fields keep their own undo, everything else undoes the store.
 api.onUndo(() => {
@@ -24,6 +30,12 @@ function useStore() {
   return store;
 }
 
+function useFriends() {
+  const [, bump] = useState(0);
+  useEffect(() => friends.subscribe(() => bump((n) => n + 1)), []);
+  return friends;
+}
+
 // MARK: - Glyphs (stand-ins for the SF Symbols)
 
 const Chevron = ({ dir, size = 12 }) => {
@@ -38,6 +50,9 @@ const FolderGlyph = () => html`<svg width="14" height="12" viewBox="0 0 14 12" f
 const FolderPlusGlyph = () => html`<svg width="16" height="13" viewBox="0 0 16 13" fill="none" stroke="currentColor"
   stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round">
   <path d="M13 5.5 V4 Q13 3 12 3 H6.5 L5 1.5 H2 Q1 1.5 1 2.5 V9.5 Q1 10.5 2 10.5 H8.5" /><path d="M12.5 7.5 V12 M10.25 9.75 H14.75" /></svg>`;
+const PeopleGlyph = () => html`<svg width="18" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor"
+  stroke-width="1.2" stroke-linecap="round"><circle cx="6.5" cy="4" r="2.6" /><path d="M1.5 12.5 Q1.5 8 6.5 8 Q11.5 8 11.5 12.5" />
+  <circle cx="12.5" cy="4.2" r="2.1" /><path d="M12.5 7.8 Q16.5 7.8 16.5 12" /></svg>`;
 const PlusCircle = () => html`<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
   <circle cx="7" cy="7" r="6" /><path d="M7 4 V10 M4 7 H10" stroke-linecap="round" /></svg>`;
 
@@ -49,6 +64,8 @@ function App() {
   // The day a click attributes to. Always inside the viewed week.
   const [loggingDay, setLoggingDay] = useState(() => W.startOfDay(new Date()));
   const [hoveredID, setHoveredID] = useState(null);
+  // The group's leaderboard in place of your own chart and rows.
+  const [showingFriends, setShowingFriends] = useState(false);
   // The row being dragged by its handle: { id, isFolder, from, offset, stride, slot, into }.
   // `slot` is where the gap is, as an index into the rows without the lifted one;
   // `into` is a folder the lifted task is held over, to drop it in.
@@ -68,6 +85,14 @@ function App() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [running]);
+
+  // The leaderboard keeps itself current while it's on screen.
+  useEffect(() => {
+    if (!showingFriends) return;
+    friends.refresh();
+    const t = setInterval(() => friends.refresh(), 60000);
+    return () => clearInterval(t);
+  }, [showingFriends]);
 
   const select = (week) => {
     const start = W.weekStart(week);
@@ -228,8 +253,13 @@ function App() {
         <button class="chev" onClick=${() => select(W.addWeeks(1, viewedWeek))} title="Next week (→)">
           <${Chevron} dir="right" />
         </button>
+        <button class="friends-toggle ${showingFriends ? 'on' : ''}" onClick=${() => setShowingFriends((v) => !v)}
+          title=${showingFriends ? 'Back to your week' : 'Compare this week with friends'}>
+          <${PeopleGlyph} />
+        </button>
       </div>
 
+      ${showingFriends ? html`<${FriendsView} week=${viewedWeek} />` : html`
       <div class="chart">
         <${Donut} slices=${slices} size=${250} hoveredID=${hoveredID} onHover=${setHoveredID} animate />
       </div>
@@ -289,7 +319,7 @@ function App() {
           onAddFolder=${(name) => store.addFolder(name, viewedWeek)} />
       </div>
 
-      <${HistoryStrip} weeks=${thumbs} selected=${viewedWeek.getTime()} onSelect=${select} />
+      <${HistoryStrip} weeks=${thumbs} selected=${viewedWeek.getTime()} onSelect=${select} />`}
     </div>
   `;
 }
@@ -687,6 +717,163 @@ function HistoryStrip({ weeks, selected, onSelect }) {
               <span class="mins num">${Duration.format(w.totalMinutes)}</span>
             </button>`)}
         </div>`}
+    </div>
+  `;
+}
+
+// MARK: - Friends (port of FriendsView.swift)
+
+/**
+ * The group's week as a leaderboard. It follows the week the window is on, so the
+ * arrows move it like everything else.
+ */
+function FriendsView({ week }) {
+  const friends = useFriends();
+  return html`
+    <div class="friends">
+      ${friends.settings
+        ? html`<${Leaderboard} standings=${friends.standings(week)} /><${GroupCard} />`
+        : html`<${JoinGroupCard} />`}
+      ${friends.problem && html`<div class="friends-problem">⚠︎ ${friends.problem}</div>`}
+    </div>
+  `;
+}
+
+/** Ready for the donut. The ids only need to be stable within one person's week. */
+const slicesOf = (standing) => (standing.week?.slices ?? []).map((s, i) => ({ id: i, ...s }));
+
+function Leaderboard({ standings }) {
+  const [expanded, setExpanded] = useState(() => new Set());
+  const toggle = (id) => setExpanded((open) => {
+    const next = new Set(open);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  return html`
+    <div class="card board">
+      ${standings.map((s) => html`
+        <div key=${s.id} class="standing ${s.total === 0 ? 'zero' : ''}">
+          <div class="standing-summary" onClick=${() => s.total > 0 && toggle(s.id)}
+            title=${s.total > 0 ? 'Click to see their week' : 'Nothing logged this week'}>
+            <span class="place num ${s.place === 1 ? 'first' : ''}">${s.place ?? '–'}</span>
+            <${Donut} slices=${slicesOf(s)} size=${22} compact />
+            <span class="name ${s.isMe ? 'me' : ''}">${s.name}</span>
+            ${s.isMe && html`<span class="you">You</span>`}
+            <span class="spacer" />
+            <span class="standing-total num">${Duration.format(s.total)}</span>
+          </div>
+          ${expanded.has(s.id) && s.total > 0 && html`<${Breakdown} standing=${s} />`}
+        </div>`)}
+      ${standings.length === 1 && html`
+        <div class="board-note">Nobody else is here yet. Send your friends the group code below.</div>`}
+    </div>
+  `;
+}
+
+/** One person's donut and what it's made of, biggest first. */
+function Breakdown({ standing }) {
+  const slices = slicesOf(standing);
+  return html`
+    <div class="breakdown">
+      <${Donut} slices=${slices} size=${96} compact />
+      <div class="breakdown-list">
+        ${[...slices].sort((a, b) => b.minutes - a.minutes).map((s) => html`
+          <div key=${s.id} class="breakdown-row">
+            <span class="dot" style=${{ background: slotColor(s.colorSlot) }} />
+            <span class="name ${s.name == null ? 'hidden-name' : ''}">${s.name ?? 'Hidden'}</span>
+            <span class="spacer" />
+            <span class="num">${Duration.format(s.minutes)}</span>
+          </div>`)}
+      </div>
+    </div>
+  `;
+}
+
+/** Which group you're in, how you appear in it, and the way out. */
+function GroupCard() {
+  const friends = useFriends();
+  const s = friends.settings;
+  const [name, setName] = useState(s.name);
+  const [copied, setCopied] = useState(false);
+  const nameRef = useRef(name);
+  nameRef.current = name;
+
+  // Leaving the screen keeps the name you typed, as Enter would.
+  useEffect(() => () => friends.rename(nameRef.current), []);
+
+  const copy = () => {
+    api.copy(displayCode(s.code));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const leave = () => {
+    if (confirm('Leave this group?\n\nYour weeks are removed from the leaderboard. You can join again with the code.')) friends.leave();
+  };
+
+  return html`
+    <div class="card group-card">
+      <div class="group-head">
+        <div>
+          <div class="caption">Group code</div>
+          <div class="code">${displayCode(s.code)}</div>
+        </div>
+        <span class="spacer" />
+        <button class="btn" onClick=${copy}>${copied ? 'Copied' : 'Copy Code'}</button>
+        <button class="btn" onClick=${() => api.openPage(friends.pageURL)}
+          title="The same leaderboard as a web page, for checking on your phone">Open in Browser</button>
+      </div>
+      <div class="divider" />
+      <label class="setting">
+        <span>Your name</span>
+        <input class="field" value=${name} onInput=${(e) => setName(e.currentTarget.value)}
+          onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
+          onBlur=${() => friends.rename(name)} />
+      </label>
+      <label class="setting" title="Friends still see your total and the coloured slices, but not what they're called">
+        <span>Hide my activity names</span>
+        <input type="checkbox" class="switch" checked=${s.hideNames}
+          onChange=${(e) => friends.setHideNames(e.currentTarget.checked, store)} />
+      </label>
+      <div class="group-foot">
+        <span class="caption">Shared: your name and the last 12 weeks’ totals per activity.</span>
+        <span class="spacer" />
+        <button class="btn danger" onClick=${leave}>Leave Group</button>
+      </div>
+    </div>
+  `;
+}
+
+/** Before you're in a group: start one, or join one with a code. */
+function JoinGroupCard() {
+  const friends = useFriends();
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const hasName = name.trim().length > 0;
+  const join = () => hasName && code && friends.join(code, name);
+
+  return html`
+    <div class="card join-card">
+      <div class="join-icon"><${PeopleGlyph} /></div>
+      <div class="join-title">Compare weeks with friends</div>
+      <div class="join-text">Start a group and send its code to your friends, or join theirs.
+        Only weekly totals are shared, never the individual entries.</div>
+      <label class="setting narrow">
+        <span>Your name</span>
+        <input class="field" placeholder="Shown to the group" value=${name}
+          onInput=${(e) => setName(e.currentTarget.value)} />
+      </label>
+      <button class="btn primary" disabled=${!hasName || friends.working}
+        onClick=${() => friends.startGroup(name)}>Start a Group</button>
+      <div class="or"><span />or join one<span /></div>
+      <div class="join-row">
+        <input class="field code-field" placeholder="Group code" value=${code}
+          onInput=${(e) => setCode(e.currentTarget.value)}
+          onKeyDown=${(e) => e.key === 'Enter' && join()} />
+        <button class="btn" disabled=${!hasName || !code || friends.working} onClick=${join}>Join</button>
+      </div>
+      ${friends.working && html`<div class="caption">Working…</div>`}
     </div>
   `;
 }

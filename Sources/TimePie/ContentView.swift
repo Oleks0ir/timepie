@@ -3,12 +3,16 @@ import Combine
 
 struct ContentView: View {
     @Environment(Store.self) private var store
+    @Environment(Friends.self) private var friends
 
     /// The week being viewed. Past weeks are fully editable — arrow back and log into them.
     @State private var viewedWeek = WeekMath.weekStart(for: Date())
     /// The day a click attributes to. Always inside the viewed week.
     @State private var loggingDay = WeekMath.startOfDay(Date())
     @State private var hoveredID: UUID?
+    /// The group's leaderboard in place of your own chart and rows.
+    /// TIMEPIE_SHOW_FRIENDS opens on it, for a test run.
+    @State private var showingFriends = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_FRIENDS"] != nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The row being dragged by its handle, and how far it has travelled.
@@ -97,8 +101,12 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
-                chart
-                rows
+                if showingFriends {
+                    FriendsView(week: viewedWeek)
+                } else {
+                    chart
+                    rows
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -111,12 +119,14 @@ struct ContentView: View {
         .environment(\.endEditing) { rootFocused = true }
         // History floats on glass over the bottom of the list, which scrolls under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HistoryStrip(
-                weeks: historyThumbs(),
-                selectedWeekStart: viewedWeek,
-                onSelect: { select(week: $0) }
-            )
-            .padding([.horizontal, .bottom], 12)
+            if !showingFriends {
+                HistoryStrip(
+                    weeks: historyThumbs(),
+                    selectedWeekStart: viewedWeek,
+                    onSelect: { select(week: $0) }
+                )
+                .padding([.horizontal, .bottom], 12)
+            }
         }
         .frame(minWidth: 460, minHeight: 620)
         .navigationTitle(WeekMath.weekLabel(for: viewedWeek))
@@ -124,6 +134,17 @@ struct ContentView: View {
                             ? "Nothing logged"
                             : "\(Duration.format(minutes: weekTotalMinutes)) logged")
         .toolbar { weekToolbar }
+        // Every change goes out to the group, if you're in one.
+        .onAppear { friends.storeChanged(store, after: 0, force: true) }
+        .onChange(of: store.revision) { friends.storeChanged(store) }
+        // The leaderboard keeps itself current while it's on screen.
+        .task(id: showingFriends) {
+            guard showingFriends else { return }
+            while !Task.isCancelled {
+                await friends.refresh()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
         .onReceive(tick) { instant in
             // Only redraw while something is actually running.
             if running != nil { now = instant }
@@ -166,6 +187,12 @@ struct ContentView: View {
             Button("This Week") { select(week: Date()) }
                 .disabled(WeekMath.isSameWeek(viewedWeek, Date()))
                 .help("Go to the current week")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Toggle(isOn: $showingFriends) {
+                Label("Friends", systemImage: "person.2")
+            }
+            .help(showingFriends ? "Back to your week" : "Compare this week with friends")
         }
     }
 

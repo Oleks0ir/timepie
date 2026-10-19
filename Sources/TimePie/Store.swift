@@ -13,6 +13,8 @@ final class Store {
     private(set) var activities: [Activity] = []
     private(set) var entries: [Entry] = []
     private(set) var folders: [Folder] = []
+    /// Goes up by one on every save, for anything that needs to follow changes.
+    private(set) var revision = 0
 
     private let fileURL: URL
     /// ⌘Z restores the previous state. Snapshots are uniform across every kind of
@@ -82,6 +84,7 @@ final class Store {
     }
 
     private func save() {
+        revision += 1
         guard let data = try? Store.encoder().encode(payload) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }

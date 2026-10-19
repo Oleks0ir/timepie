@@ -1,6 +1,6 @@
 // The native shell: one window, a menu, and the data file. Everything you see is
 // rendered by src/ — this side only touches the disk and the OS.
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, clipboard } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -13,6 +13,8 @@ app.setAppUserModelId('com.nikolaikravchenko.timepie');
 // be the real Mac app's file.
 const dataDir = process.env.TIMEPIE_DATA_DIR || path.join(app.getPath('appData'), 'TimePie');
 const dataFile = path.join(dataDir, 'timepie.json');
+// Which friends group you're in, if any — kept apart from your data.
+const friendsFile = path.join(dataDir, 'friends.json');
 
 let win;
 
@@ -103,6 +105,28 @@ ipcMain.handle('store:save', (_event, json) => {
   fs.writeFileSync(tmp, json);
   fs.renameSync(tmp, dataFile);
 });
+
+ipcMain.handle('friends:load', () => {
+  try {
+    return fs.readFileSync(friendsFile, 'utf8');
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('friends:save', (_event, json) => {
+  if (json == null) return fs.rmSync(friendsFile, { force: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(friendsFile + '.tmp', json);
+  fs.renameSync(friendsFile + '.tmp', friendsFile);
+});
+
+// Only ever the leaderboard's own web page.
+ipcMain.handle('open:page', (_event, url) => {
+  if (url.startsWith('https://timepie-friends.timepie.workers.dev/')) shell.openExternal(url);
+});
+
+ipcMain.handle('clipboard:write', (_event, text) => clipboard.writeText(String(text)));
 
 ipcMain.handle('menu:context', (event, items) => {
   return new Promise((resolve) => {

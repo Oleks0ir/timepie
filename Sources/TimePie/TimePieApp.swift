@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct TimePieApp: App {
     @State private var store = Store()
+    @State private var friends = Friends()
 
     var body: some Scene {
         WindowGroup("TimePie") {
             ContentView()
                 .environment(store)
+                .environment(friends)
                 .background(FullScreenBlocker())
         }
         .defaultSize(width: 520, height: 700)
