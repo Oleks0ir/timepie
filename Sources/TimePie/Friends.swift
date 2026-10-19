@@ -1,24 +1,40 @@
 import Foundation
 import Observation
 
-/// Comparing weeks with a group of friends.
+/// Comparing weeks with groups of friends.
 ///
 /// Nothing leaves the computer until you start or join a group. From then on, every
-/// change pushes a summary of your last twelve weeks — a total and the slices, with
-/// the activity names left out if you'd rather — and never the entries themselves.
-/// The server replaces your summary whole on each push, so it can't drift from here.
+/// change pushes a summary of your last twelve weeks to each group you're in — a total
+/// and the slices, with the activity names left out if you'd rather — and never the
+/// entries themselves. The server replaces your summary whole on each push, so it
+/// can't drift from here.
 ///
-/// Which group you're in, and the id and secret token that let only this app change
-/// your row, sit beside the data file in friends.json.
+/// Which groups you're in, and for each the id and secret token that let only this app
+/// change your row, sit beside the data file in friends.json.
 @MainActor
 @Observable
 final class Friends {
-    struct Settings: Codable, Equatable {
+    /// One group you're in, and how you appear in it.
+    struct Membership: Codable, Equatable, Identifiable {
         var code: String
         var memberID: UUID
         var token: String
         var name: String
         var hideNames: Bool = false
+        /// What you call the group. Only this app sees it.
+        var label: String?
+
+        var id: String { code }
+        var title: String {
+            let trimmed = label?.trimmingCharacters(in: .whitespaces) ?? ""
+            return trimmed.isEmpty ? Friends.display(code: code) : trimmed
+        }
+    }
+
+    /// friends.json. Before there could be several groups it held one Membership alone.
+    private struct SavedFile: Codable {
+        var groups: [Membership]
+        var selected: String?
     }
 
     struct SliceSummary: Codable, Equatable {
@@ -45,40 +61,68 @@ final class Friends {
                             ?? "https://timepie-friends.timepie.workers.dev")!
     private static let weeksShared = 12
 
-    private(set) var settings: Settings?
-    private(set) var members: [Member] = []
+    private(set) var groups: [Membership] = []
+    /// The group on screen.
+    private(set) var selectedCode: String?
+    private var membersByGroup: [String: [Member]] = [:]
     /// The last thing that went wrong, worded for the person reading it.
     private(set) var problem: String?
     private(set) var isWorking = false
-    /// What this app would send right now. Your own row is drawn from this rather than
-    /// the server's copy, so it's never a push behind.
+    /// What this app would send right now, names and all. Your own row is drawn from
+    /// this rather than the server's copy, so it's never a push behind.
     private(set) var mine: [WeekSummary] = []
 
     private let fileURL: URL
     private var pushTask: Task<Void, Never>?
-    private var pushPending = false
+    /// Groups still owed the latest summary.
+    private var pushPending: Set<String> = []
 
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? Store.defaultFileURL()
             .deletingLastPathComponent()
             .appendingPathComponent("friends.json")
         if let data = try? Data(contentsOf: self.fileURL) {
-            settings = try? JSONDecoder().decode(Settings.self, from: data)
+            if let saved = try? JSONDecoder().decode(SavedFile.self, from: data) {
+                groups = saved.groups
+                selectedCode = saved.selected
+            } else if let one = try? JSONDecoder().decode(Membership.self, from: data) {
+                groups = [one]
+            }
         }
+        if current == nil { selectedCode = groups.first?.code }
+    }
+
+    var current: Membership? {
+        groups.first { $0.code == selectedCode }
+    }
+
+    /// Everyone in the group on screen, as the server last said.
+    var members: [Member] {
+        selectedCode.flatMap { membersByGroup[$0] } ?? []
     }
 
     /// "ABCDEF" reads as "ABC-DEF".
-    static func display(code: String) -> String {
+    nonisolated static func display(code: String) -> String {
         code.count == 6 ? "\(code.prefix(3))-\(code.suffix(3))" : code
     }
 
     var pageURL: URL? {
-        settings.map { Friends.server.appendingPathComponent("g/\($0.code)") }
+        current.map { Friends.server.appendingPathComponent("g/\($0.code)") }
+    }
+
+    func select(_ code: String) {
+        guard code != selectedCode, groups.contains(where: { $0.code == code }) else { return }
+        selectedCode = code
+        problem = nil
+        save()
+        Task { await refresh() }
     }
 
     // MARK: - Joining and leaving
 
-    func startGroup(name: String) async {
+    /// True once you're in the new group.
+    @discardableResult
+    func startGroup(name: String) async -> Bool {
         await run {
             let created: [String: String] = try await self.request("POST", "api/groups")
             guard let code = created["code"] else { throw Problem("The server didn't send a code.") }
@@ -86,51 +130,81 @@ final class Friends {
         }
     }
 
-    func join(code raw: String, name: String) async {
+    /// True once you're in the group, including when you already were.
+    @discardableResult
+    func join(code raw: String, name: String) async -> Bool {
         let code = raw.uppercased().filter { $0.isLetter || $0.isNumber }
         guard code.count == 6 else {
             problem = "A group code is six letters and numbers, like ABC-DEF."
-            return
+            return false
         }
-        await run {
+        if groups.contains(where: { $0.code == code }) {
+            select(code)
+            return true
+        }
+        return await run {
             // Fetched first, so a mistyped code fails here rather than on the first push.
             let group: GroupResponse = try await self.request("GET", "api/groups/\(code)")
-            self.members = group.members
+            self.membersByGroup[code] = group.members
             try await self.enter(code: code, name: name)
         }
     }
 
     private func enter(code: String, name: String) async throws {
-        save(Settings(code: code, memberID: UUID(), token: Friends.makeToken(),
-                      name: name.trimmingCharacters(in: .whitespaces)))
-        try await push()
+        groups.append(Membership(code: code, memberID: UUID(), token: Friends.makeToken(),
+                                 name: name.trimmingCharacters(in: .whitespaces)))
+        selectedCode = code
+        save()
+        try await push(code)
         try await fetch()
     }
 
+    /// Leaves the group on screen; the next one takes its place.
     func leave() async {
-        guard let settings else { return }
+        guard let group = current else { return }
         // Even if the server can't be reached, this app stops sharing.
         _ = try? await request(
-            "DELETE", "api/groups/\(settings.code)/members/\(settings.memberID.uuidString)",
-            token: settings.token) as Ignored
-        save(nil)
-        members = []
+            "DELETE", "api/groups/\(group.code)/members/\(group.memberID.uuidString)",
+            token: group.token) as Ignored
+        forget(group.code)
         problem = nil
     }
 
-    func rename(to name: String) {
+    func rename(group code: String, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard var s = settings, !trimmed.isEmpty, trimmed != s.name else { return }
-        s.name = trimmed
-        save(s)
-        schedulePush(after: 0)
+        update(code) { $0.name = trimmed.isEmpty ? $0.name : trimmed }
     }
 
-    func setHideNames(_ hide: Bool, store: Store) {
-        guard var s = settings, s.hideNames != hide else { return }
-        s.hideNames = hide
-        save(s)
-        storeChanged(store, after: 0, force: true)
+    func setLabel(group code: String, to label: String) {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        guard let i = groups.firstIndex(where: { $0.code == code }),
+              trimmed != (groups[i].label ?? "") else { return }
+        groups[i].label = trimmed.isEmpty ? nil : trimmed
+        save()
+    }
+
+    func setHideNames(_ hide: Bool, group code: String) {
+        update(code) { $0.hideNames = hide }
+    }
+
+    /// Changes what a group sees of you, and tells it.
+    private func update(_ code: String, _ change: (inout Membership) -> Void) {
+        guard let i = groups.firstIndex(where: { $0.code == code }) else { return }
+        var group = groups[i]
+        change(&group)
+        guard group != groups[i] else { return }
+        groups[i] = group
+        save()
+        schedulePush(to: [code], after: 0)
+    }
+
+    /// Drops a group from this app, whether you left it or it's gone from the server.
+    private func forget(_ code: String) {
+        groups.removeAll { $0.code == code }
+        membersByGroup[code] = nil
+        pushPending.remove(code)
+        if selectedCode == code { selectedCode = groups.first?.code }
+        save()
     }
 
     // MARK: - Keeping in step
@@ -138,68 +212,89 @@ final class Friends {
     /// Called whenever the data changes. Pushes are gathered up for a moment, so a run of
     /// quick clicks sends one request rather than a dozen.
     func storeChanged(_ store: Store, after delay: Double = 2, force: Bool = false) {
-        let summaries = Friends.summaries(of: store, hidingNames: settings?.hideNames ?? false)
+        let summaries = Friends.summaries(of: store)
         // Reordering or folding a folder changes nothing anyone else can see.
         guard force || summaries != mine else { return }
         mine = summaries
-        schedulePush(after: delay)
+        schedulePush(to: groups.map(\.code), after: delay)
     }
 
-    private func schedulePush(after delay: Double) {
-        guard settings != nil else { return }
-        pushPending = true
+    private func schedulePush(to codes: [String], after delay: Double) {
+        pushPending.formUnion(codes)
+        guard !pushPending.isEmpty else { return }
         pushTask?.cancel()
         pushTask = Task {
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
-            await run { try await self.push() }
+            await run { try await self.pushPendingGroups() }
         }
     }
 
-    /// Fetches everyone's weeks, first sending ours if an earlier push didn't get through.
+    /// Fetches everyone's weeks in the group on screen, first sending ours to any group
+    /// an earlier push didn't get through to.
     func refresh() async {
-        guard settings != nil else { return }
+        guard current != nil else { return }
         await run {
-            if self.pushPending { try await self.push() }
+            // One unreachable group shouldn't keep this one's leaderboard stale.
+            var pushProblem: Error?
+            do { try await self.pushPendingGroups() } catch { pushProblem = error }
             try await self.fetch()
+            if let pushProblem { throw pushProblem }
         }
     }
 
-    private func push() async throws {
-        guard let settings else { return }
-        pushPending = true
-        let body = PushBody(name: settings.name, weeks: mine)
-        let _: Ignored = try await request(
-            "PUT", "api/groups/\(settings.code)/members/\(settings.memberID.uuidString)",
-            body: body, token: settings.token)
-        pushPending = false
+    /// Tries every group still owed a push, then reports the first thing that failed.
+    private func pushPendingGroups() async throws {
+        var firstProblem: Error?
+        for code in pushPending.sorted() {
+            do { try await push(code) } catch { firstProblem = firstProblem ?? error }
+        }
+        if let firstProblem { throw firstProblem }
+    }
+
+    private func push(_ code: String) async throws {
+        guard let group = groups.first(where: { $0.code == code }) else {
+            pushPending.remove(code)
+            return
+        }
+        pushPending.insert(code)
+        let weeks = group.hideNames ? Friends.hidingNames(mine) : mine
+        do {
+            let _: Ignored = try await request(
+                "PUT", "api/groups/\(code)/members/\(group.memberID.uuidString)",
+                body: PushBody(name: group.name, weeks: weeks), token: group.token)
+        } catch let problem as Problem where problem.status == 404 {
+            forget(code)
+            throw Problem("\(group.title) no longer exists.")
+        }
+        pushPending.remove(code)
     }
 
     private func fetch() async throws {
-        guard let settings else { return }
+        guard let group = current else { return }
         do {
-            let group: GroupResponse = try await request("GET", "api/groups/\(settings.code)")
-            members = group.members
+            let response: GroupResponse = try await request("GET", "api/groups/\(group.code)")
+            membersByGroup[group.code] = response.members
         } catch let problem as Problem where problem.status == 404 {
             // The group is gone from the server; nothing to stay in.
-            save(nil)
-            members = []
-            throw Problem("That group no longer exists.")
+            forget(group.code)
+            throw Problem("\(group.title) no longer exists.")
         }
     }
 
-    /// Everyone in the group for one week, highest total first. Your own row uses what's
-    /// on this computer, and is there even before the first push lands.
+    /// Everyone in the group on screen for one week, highest total first. Your own row
+    /// uses what's on this computer, and is there even before the first push lands.
     func standings(week: Date) -> [Standing] {
         let key = DayStamp.string(from: WeekMath.weekStart(for: week))
-        let me = settings?.memberID.uuidString
+        let me = current?.memberID.uuidString
         var rows = members.filter { $0.id != me }.map {
             Standing(id: $0.id, name: $0.name, isMe: false,
                      week: $0.weeks.first { $0.week == key })
         }
-        if let settings {
-            rows.append(Standing(id: settings.memberID.uuidString, name: settings.name, isMe: true,
-                                 week: mine.first { $0.week == key }))
+        if let group = current {
+            let weeks = group.hideNames ? Friends.hidingNames(mine) : mine
+            rows.append(Standing(id: group.memberID.uuidString, name: group.name, isMe: true,
+                                 week: weeks.first { $0.week == key }))
         }
         rows.sort {
             $0.total != $1.total ? $0.total > $1.total
@@ -235,7 +330,7 @@ final class Friends {
 
     // MARK: - Summaries
 
-    static func summaries(of store: Store, hidingNames: Bool) -> [WeekSummary] {
+    static func summaries(of store: Store) -> [WeekSummary] {
         let thisWeek = WeekMath.weekStart(for: Date())
         return (0..<weeksShared).compactMap { back in
             let start = WeekMath.addWeeks(-back, to: thisWeek)
@@ -245,21 +340,28 @@ final class Friends {
             let slices = store.activities(forWeek: start).compactMap { activity -> SliceSummary? in
                 let minutes = store.minutes(activityID: activity.id, from: start, to: end)
                 guard minutes > 0 else { return nil }
-                return SliceSummary(name: hidingNames ? nil : activity.name,
-                                    minutes: minutes, colorSlot: activity.colorSlot)
+                return SliceSummary(name: activity.name, minutes: minutes, colorSlot: activity.colorSlot)
             }
             return WeekSummary(week: DayStamp.string(from: start), total: total, slices: slices)
         }
     }
 
+    /// The same weeks for a group you keep your activity names from.
+    static func hidingNames(_ weeks: [WeekSummary]) -> [WeekSummary] {
+        weeks.map { week in
+            var week = week
+            week.slices = week.slices.map { SliceSummary(name: nil, minutes: $0.minutes, colorSlot: $0.colorSlot) }
+            return week
+        }
+    }
+
     // MARK: - Plumbing
 
-    private func save(_ new: Settings?) {
-        settings = new
-        if let new, let data = try? JSONEncoder().encode(new) {
-            try? data.write(to: fileURL, options: .atomic)
-        } else {
+    private func save() {
+        if groups.isEmpty {
             try? FileManager.default.removeItem(at: fileURL)
+        } else if let data = try? JSONEncoder().encode(SavedFile(groups: groups, selected: selectedCode)) {
+            try? data.write(to: fileURL, options: .atomic)
         }
     }
 
@@ -268,12 +370,15 @@ final class Friends {
     }
 
     /// Runs one piece of network work, turning whatever goes wrong into `problem`.
-    private func run(_ work: @escaping () async throws -> Void) async {
+    /// True when it all went through.
+    @discardableResult
+    private func run(_ work: @escaping () async throws -> Void) async -> Bool {
         isWorking = true
         defer { isWorking = false }
         do {
             try await work()
             problem = nil
+            return true
         } catch is CancellationError {
         } catch let p as Problem {
             problem = p.message
@@ -281,6 +386,7 @@ final class Friends {
         } catch {
             problem = "Can't reach the TimePie server. Check your internet connection."
         }
+        return false
     }
 
     private func request<T: Decodable>(_ method: String, _ path: String,

@@ -1,7 +1,7 @@
 // Port of ContentView, ActivityRow, DonutChart and HistoryStrip.
 import { html, render, useState, useEffect, useLayoutEffect, useRef } from './vendor/preact-htm.js';
 import * as W from './model.js';
-import { Friends, displayCode } from './friends.js';
+import { Friends, displayCode, groupTitle } from './friends.js';
 
 const { Duration, SLOT_COUNT } = W;
 const api = window.timepie;
@@ -724,17 +724,47 @@ function HistoryStrip({ weeks, selected, onSelect }) {
 // MARK: - Friends (port of FriendsView.swift)
 
 /**
- * The group's week as a leaderboard. It follows the week the window is on, so the
+ * A group's week as a leaderboard. It follows the week the window is on, so the
  * arrows move it like everything else.
  */
 function FriendsView({ week }) {
   const friends = useFriends();
+  // Starting or joining one more group, over the one on screen.
+  const [adding, setAdding] = useState(false);
+  const group = friends.current;
+  // Keyed by group, so each starts fresh: nothing open, and its own drafts.
   return html`
     <div class="friends">
-      ${friends.settings
-        ? html`<${Leaderboard} standings=${friends.standings(week)} /><${GroupCard} />`
-        : html`<${JoinGroupCard} />`}
+      ${group && !adding
+        ? html`<${GroupPicker} onAdd=${() => setAdding(true)} />
+          <${Leaderboard} key=${'board-' + group.code} standings=${friends.standings(week)} />
+          <${GroupCard} key=${'card-' + group.code} group=${group} />`
+        : html`<${JoinGroupCard} onDone=${() => setAdding(false)}
+            onCancel=${friends.groups.length ? () => setAdding(false) : null} />`}
       ${friends.problem && html`<div class="friends-problem">⚠︎ ${friends.problem}</div>`}
+    </div>
+  `;
+}
+
+/** Which of your groups is on screen, and the way into another. */
+function GroupPicker({ onAdd }) {
+  const friends = useFriends();
+  const groups = friends.groups;
+  return html`
+    <div class="group-picker">
+      ${groups.length > 1 && groups.length <= 4 && html`
+        <div class="segmented">
+          ${groups.map((g) => html`
+            <button key=${g.code} class=${g.code === friends.selectedCode ? 'on' : ''}
+              onClick=${() => friends.select(g.code)}>${groupTitle(g)}</button>`)}
+        </div>`}
+      ${groups.length > 4 && html`
+        <select class="field group-select" value=${friends.selectedCode}
+          onChange=${(e) => friends.select(e.currentTarget.value)}>
+          ${groups.map((g) => html`<option key=${g.code} value=${g.code}>${groupTitle(g)}</option>`)}
+        </select>`}
+      <span class="spacer" />
+      <button class="btn" onClick=${onAdd} title="Start or join another group">+ Add Group</button>
     </div>
   `;
 }
@@ -790,17 +820,20 @@ function Breakdown({ standing }) {
   `;
 }
 
-/** Which group you're in, how you appear in it, and the way out. */
-function GroupCard() {
+/** The group on screen, how you appear in it, and the way out. */
+function GroupCard({ group: s }) {
   const friends = useFriends();
-  const s = friends.settings;
   const [name, setName] = useState(s.name);
+  const [label, setLabel] = useState(s.label ?? '');
   const [copied, setCopied] = useState(false);
-  const nameRef = useRef(name);
-  nameRef.current = name;
+  const drafts = useRef();
+  drafts.current = { name, label };
 
-  // Leaving the screen keeps the name you typed, as Enter would.
-  useEffect(() => () => friends.rename(nameRef.current), []);
+  // Leaving the screen, or this group, keeps what you typed, as Enter would.
+  useEffect(() => () => {
+    friends.rename(s.code, drafts.current.name);
+    friends.setLabel(s.code, drafts.current.label);
+  }, []);
 
   const copy = () => {
     api.copy(displayCode(s.code));
@@ -809,8 +842,9 @@ function GroupCard() {
   };
 
   const leave = () => {
-    if (confirm('Leave this group?\n\nYour weeks are removed from the leaderboard. You can join again with the code.')) friends.leave();
+    if (confirm(`Leave ${groupTitle(s)}?\n\nYour weeks are removed from its leaderboard. You can join again with the code.`)) friends.leave();
   };
+  const blurOnEnter = (e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); };
 
   return html`
     <div class="card group-card">
@@ -825,16 +859,21 @@ function GroupCard() {
           title="The same leaderboard as a web page, for checking on your phone">Open in Browser</button>
       </div>
       <div class="divider" />
+      <label class="setting" title="Only you see this, to tell your groups apart">
+        <span>Group name</span>
+        <input class="field" placeholder=${displayCode(s.code)} value=${label}
+          onInput=${(e) => setLabel(e.currentTarget.value)}
+          onKeyDown=${blurOnEnter} onBlur=${() => friends.setLabel(s.code, label)} />
+      </label>
       <label class="setting">
         <span>Your name</span>
         <input class="field" value=${name} onInput=${(e) => setName(e.currentTarget.value)}
-          onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
-          onBlur=${() => friends.rename(name)} />
+          onKeyDown=${blurOnEnter} onBlur=${() => friends.rename(s.code, name)} />
       </label>
       <label class="setting" title="Friends still see your total and the coloured slices, but not what they're called">
         <span>Hide my activity names</span>
         <input type="checkbox" class="switch" checked=${s.hideNames}
-          onChange=${(e) => friends.setHideNames(e.currentTarget.checked, store)} />
+          onChange=${(e) => friends.setHideNames(s.code, e.currentTarget.checked)} />
       </label>
       <div class="group-foot">
         <span class="caption">Shared: your name and the last 12 weeks’ totals per activity.</span>
@@ -845,18 +884,22 @@ function GroupCard() {
   `;
 }
 
-/** Before you're in a group: start one, or join one with a code. */
-function JoinGroupCard() {
+/**
+ * Start a group, or join one with a code: the first, or one more. `onCancel` goes back
+ * to the group on screen, and is null when there isn't one.
+ */
+function JoinGroupCard({ onDone, onCancel }) {
   const friends = useFriends();
-  const [name, setName] = useState('');
+  // The name you go by in your other groups, if you have any.
+  const [name, setName] = useState(() => friends.groups.at(-1)?.name ?? '');
   const [code, setCode] = useState('');
   const hasName = name.trim().length > 0;
-  const join = () => hasName && code && friends.join(code, name);
+  const join = () => hasName && code && friends.join(code, name).then((ok) => ok && onDone());
 
   return html`
     <div class="card join-card">
       <div class="join-icon"><${PeopleGlyph} /></div>
-      <div class="join-title">Compare weeks with friends</div>
+      <div class="join-title">${onCancel ? 'Add another group' : 'Compare weeks with friends'}</div>
       <div class="join-text">Start a group and send its code to your friends, or join theirs.
         Only weekly totals are shared, never the individual entries.</div>
       <label class="setting narrow">
@@ -865,7 +908,7 @@ function JoinGroupCard() {
           onInput=${(e) => setName(e.currentTarget.value)} />
       </label>
       <button class="btn primary" disabled=${!hasName || friends.working}
-        onClick=${() => friends.startGroup(name)}>Start a Group</button>
+        onClick=${() => friends.startGroup(name).then((ok) => ok && onDone())}>Start a Group</button>
       <div class="or"><span />or join one<span /></div>
       <div class="join-row">
         <input class="field code-field" placeholder="Group code" value=${code}
@@ -874,6 +917,7 @@ function JoinGroupCard() {
         <button class="btn" disabled=${!hasName || !code || friends.working} onClick=${join}>Join</button>
       </div>
       ${friends.working && html`<div class="caption">Working…</div>`}
+      ${onCancel && html`<button class="btn" onClick=${onCancel}>Cancel</button>`}
     </div>
   `;
 }

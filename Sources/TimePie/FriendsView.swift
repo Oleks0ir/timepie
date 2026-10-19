@@ -1,20 +1,27 @@
 import AppKit
 import SwiftUI
 
-/// The group's week as a leaderboard, in place of your own chart and rows. It follows
+/// A group's week as a leaderboard, in place of your own chart and rows. It follows
 /// the week the window is on, so the arrows and History move it like everything else.
 struct FriendsView: View {
     let week: Date
 
     @Environment(Friends.self) private var friends
+    /// Starting or joining one more group, over the one on screen.
+    @State private var adding = false
 
     var body: some View {
         VStack(spacing: 18) {
-            if friends.settings == nil {
-                JoinGroupCard()
-            } else {
+            if let group = friends.current, !adding {
+                GroupPicker(onAdd: { adding = true })
+                // Fresh state for each group: nothing open, and its own drafts.
                 Leaderboard(standings: friends.standings(week: week))
-                GroupCard()
+                    .id(group.code)
+                GroupCard(group: group)
+                    .id(group.code)
+            } else {
+                JoinGroupCard(onDone: { adding = false },
+                              onCancel: friends.groups.isEmpty ? nil : { adding = false })
             }
             status
         }
@@ -160,70 +167,119 @@ private struct Breakdown: View {
 
 // MARK: - The group
 
-/// Which group you're in, how you appear in it, and the way out.
-private struct GroupCard: View {
+/// Which of your groups is on screen, and the way into another.
+private struct GroupPicker: View {
+    let onAdd: () -> Void
+
     @Environment(Friends.self) private var friends
-    @Environment(Store.self) private var store
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if friends.groups.count > 1 {
+                let picker = Picker("Group", selection: Binding(
+                    get: { friends.selectedCode ?? "" },
+                    set: { friends.select($0) }
+                )) {
+                    ForEach(friends.groups) { Text($0.title).tag($0.code) }
+                }
+                .labelsHidden()
+                // Past a few, the segments won't fit across the window.
+                if friends.groups.count <= 4 {
+                    picker.pickerStyle(.segmented)
+                } else {
+                    picker.pickerStyle(.menu).fixedSize()
+                }
+            }
+            Spacer(minLength: 0)
+            Button(action: onAdd) {
+                Label("Add Group", systemImage: "plus")
+            }
+            .help("Start or join another group")
+        }
+    }
+}
+
+/// The group on screen, how you appear in it, and the way out.
+private struct GroupCard: View {
+    let group: Friends.Membership
+
+    @Environment(Friends.self) private var friends
 
     @State private var nameDraft = ""
+    @State private var labelDraft = ""
     @State private var confirmingLeave = false
     @State private var copied = false
 
     var body: some View {
-        if let settings = friends.settings {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Group code")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(Friends.display(code: settings.code))
-                            .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-                    Spacer()
-                    Button(copied ? "Copied" : "Copy Code") { copy(settings.code) }
-                    if let url = friends.pageURL {
-                        Button("Open in Browser") { NSWorkspace.shared.open(url) }
-                            .help("The same leaderboard as a web page, for checking on your phone")
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Group code")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(Friends.display(code: group.code))
+                        .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                        .textSelection(.enabled)
                 }
+                Spacer()
+                Button(copied ? "Copied" : "Copy Code") { copy(group.code) }
+                if let url = friends.pageURL {
+                    Button("Open in Browser") { NSWorkspace.shared.open(url) }
+                        .help("The same leaderboard as a web page, for checking on your phone")
+                }
+            }
 
-                Divider()
+            Divider()
 
-                LabeledContent("Your name") {
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    Text("Group name")
+                    TextField(Friends.display(code: group.code), text: $labelDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 180)
+                        .onSubmit { friends.setLabel(group: group.code, to: labelDraft) }
+                }
+                .help("Only you see this, to tell your groups apart")
+                GridRow {
+                    Text("Your name")
                     TextField("Name", text: $nameDraft)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 180)
-                        .onSubmit { friends.rename(to: nameDraft) }
-                }
-
-                Toggle("Hide my activity names", isOn: Binding(
-                    get: { settings.hideNames },
-                    set: { friends.setHideNames($0, store: store) }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .help("Friends still see your total and the coloured slices, but not what they're called")
-
-                HStack {
-                    Text("Shared: your name and the last 12 weeks’ totals per activity.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Leave Group", role: .destructive) { confirmingLeave = true }
+                        .onSubmit { friends.rename(group: group.code, to: nameDraft) }
                 }
             }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
-            .onAppear { nameDraft = settings.name }
-            // Leaving the screen keeps the name you typed, as Return would.
-            .onDisappear { friends.rename(to: nameDraft) }
-            .confirmationDialog("Leave this group?", isPresented: $confirmingLeave) {
-                Button("Leave Group", role: .destructive) { Task { await friends.leave() } }
-            } message: {
-                Text("Your weeks are removed from the leaderboard. You can join again with the code.")
+
+            Toggle("Hide my activity names", isOn: Binding(
+                get: { group.hideNames },
+                set: { friends.setHideNames($0, group: group.code) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("Friends still see your total and the coloured slices, but not what they're called")
+
+            HStack {
+                Text("Shared: your name and the last 12 weeks’ totals per activity.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Leave Group", role: .destructive) { confirmingLeave = true }
             }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
+        .onAppear {
+            nameDraft = group.name
+            labelDraft = group.label ?? ""
+        }
+        // Leaving the screen, or this group, keeps what you typed, as Return would.
+        .onDisappear {
+            friends.rename(group: group.code, to: nameDraft)
+            friends.setLabel(group: group.code, to: labelDraft)
+        }
+        .confirmationDialog("Leave \(group.title)?", isPresented: $confirmingLeave) {
+            Button("Leave Group", role: .destructive) { Task { await friends.leave() } }
+        } message: {
+            Text("Your weeks are removed from its leaderboard. You can join again with the code.")
         }
     }
 
@@ -238,11 +294,15 @@ private struct GroupCard: View {
     }
 }
 
-/// Before you're in a group: start one, or join one with a code.
+/// Start a group, or join one with a code: the first, or one more.
 private struct JoinGroupCard: View {
+    let onDone: () -> Void
+    /// Back to the group on screen. Nil when there isn't one.
+    let onCancel: (() -> Void)?
+
     @Environment(Friends.self) private var friends
 
-    @State private var name = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
+    @State private var name = ""
     @State private var code = ""
 
     private var hasName: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -255,7 +315,7 @@ private struct JoinGroupCard: View {
                 .symbolRenderingMode(.hierarchical)
 
             VStack(spacing: 6) {
-                Text("Compare weeks with friends")
+                Text(onCancel == nil ? "Compare weeks with friends" : "Add another group")
                     .font(.title3.weight(.semibold))
                 Text("Start a group and send its code to your friends, or join theirs. Only weekly totals are shared, never the individual entries.")
                     .font(.callout)
@@ -272,7 +332,7 @@ private struct JoinGroupCard: View {
             .frame(maxWidth: 300)
 
             Button {
-                Task { await friends.startGroup(name: name) }
+                Task { if await friends.startGroup(name: name) { onDone() } }
             } label: {
                 Text("Start a Group").frame(minWidth: 140)
             }
@@ -300,15 +360,25 @@ private struct JoinGroupCard: View {
             if friends.isWorking {
                 ProgressView().controlSize(.small)
             }
+
+            if let onCancel {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(.vertical, 28)
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
+        // The name you go by in your other groups, if you have any.
+        .onAppear {
+            name = friends.groups.last?.name
+                ?? NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
+        }
     }
 
     private func join() {
         guard hasName, !code.isEmpty else { return }
-        Task { await friends.join(code: code, name: name) }
+        Task { if await friends.join(code: code, name: name) { onDone() } }
     }
 }

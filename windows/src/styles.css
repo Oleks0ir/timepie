@@ -257,6 +257,16 @@ button { font: inherit; color: inherit; cursor: default; }
 .breakdown-row .num { color: var(--secondary); }
 .hidden-name { color: var(--muted); font-style: italic; }
 
+.group-picker { display: flex; align-items: center; gap: 8px; }
+.segmented { display: flex; padding: 2px; gap: 2px; border-radius: 7px; background: var(--hover); min-width: 0; }
+.segmented button {
+  border: 0; border-radius: 5px; background: transparent; padding: 3px 12px; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;
+}
+.segmented button:hover:not(.on) { background: var(--hover); }
+.segmented button.on { background: var(--selected); color: var(--accent); font-weight: 600; }
+.group-select { width: auto; max-width: 220px; }
+
 .group-card { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .group-head { display: flex; align-items: center; gap: 8px; }
 .group-head .code { font: 600 17px ui-monospace, Consolas, monospace; user-select: text; }
