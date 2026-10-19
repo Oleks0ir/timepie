@@ -239,7 +239,7 @@ private struct GroupCard: View {
                         .frame(maxWidth: 180)
                         .onSubmit { friends.setLabel(group: group.code, to: labelDraft) }
                 }
-                .help("Only you see this, to tell your groups apart")
+                .help("Everyone in the group sees this name")
                 GridRow {
                     Text("Your name")
                     TextField("Name", text: $nameDraft)
@@ -270,6 +270,10 @@ private struct GroupCard: View {
         .onAppear {
             nameDraft = group.name
             labelDraft = group.label ?? ""
+        }
+        // Someone else renamed the group: follow them, unless you're typing a name yourself.
+        .onChange(of: group.label) { old, new in
+            if labelDraft == (old ?? "") { labelDraft = new ?? "" }
         }
         // Leaving the screen, or this group, keeps what you typed, as Return would.
         .onDisappear {

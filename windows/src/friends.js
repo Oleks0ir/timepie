@@ -13,7 +13,7 @@ const WEEKS_SHARED = 12;
 /** "ABCDEF" reads as "ABC-DEF". */
 export const displayCode = (code) => (code.length === 6 ? `${code.slice(0, 3)}-${code.slice(3)}` : code);
 
-/** What you call a group (only this app sees it), or else its code. */
+/** The group's name, shared by everyone in it, or else its code. */
 export const groupTitle = (group) => group.label?.trim() || displayCode(group.code);
 
 /** The same weeks for a group you keep your activity names from. */
@@ -43,6 +43,8 @@ export class Friends {
   #pushTimer = null;
   /** Groups still owed the latest summary. */
   #pushPending = new Set();
+  /** Groups you renamed that the server hasn't heard about yet. */
+  #namePending = new Set();
 
   constructor(json, persist) {
     this.#persist = persist;
@@ -126,7 +128,7 @@ export class Friends {
     this.selectedCode = code;
     this.#save();
     await this.#push(code);
-    await this.#fetch();
+    await this.#fetch(code);
   }
 
   /** Leaves the group on screen; the next one takes its place. */
@@ -145,11 +147,23 @@ export class Friends {
     if (trimmed) this.#update(code, { name: trimmed });
   }
 
+  /** Names the group for everyone in it. An empty name goes back to showing the code. */
   setLabel(code, label) {
     const g = this.groups.find((g) => g.code === code);
     const trimmed = label.trim();
     if (!g || trimmed === (g.label ?? '')) return;
-    this.groups = this.groups.map((g) => (g.code === code ? { ...g, label: trimmed || undefined } : g));
+    this.#setCachedLabel(code, trimmed || null);
+    this.#namePending.add(code);
+    this.#run(() => this.#sendPendingNames());
+  }
+
+  /**
+   * `labelShared` says the name has been to the server. Not so for one named in 1.4.0,
+   * when names stayed on this computer.
+   */
+  #setCachedLabel(code, label, labelShared) {
+    this.groups = this.groups.map((g) => (g.code === code
+      ? { ...g, label: label ?? undefined, labelShared: labelShared ?? g.labelShared } : g));
     this.#save();
   }
 
@@ -171,6 +185,7 @@ export class Friends {
     this.groups = this.groups.filter((g) => g.code !== code);
     this.#membersByGroup.delete(code);
     this.#pushPending.delete(code);
+    this.#namePending.delete(code);
     if (this.selectedCode === code) this.selectedCode = this.groups[0]?.code ?? null;
     this.#save();
   }
@@ -198,16 +213,22 @@ export class Friends {
   }
 
   /**
-   * Fetches everyone's weeks in the group on screen, first sending ours to any group an
-   * earlier push didn't get through to.
+   * Fetches every group's weeks and name, the one on screen first, and sends anything an
+   * earlier attempt didn't get through.
    */
   refresh() {
-    if (!this.current) return Promise.resolve(false);
+    const current = this.current;
+    if (!current) return Promise.resolve(false);
     return this.#run(async () => {
-      // One unreachable group shouldn't keep this one's leaderboard stale.
-      const pushProblem = await this.#pushPendingGroups().then(() => null, (e) => e);
-      await this.#fetch();
-      if (pushProblem) throw pushProblem;
+      // One unreachable group shouldn't keep the others stale.
+      let firstProblem = null;
+      const attempt = (work) => work().catch((e) => { firstProblem ??= e; });
+      await attempt(() => this.#pushPendingGroups());
+      const others = this.groups.map((g) => g.code).filter((c) => c !== current.code);
+      for (const code of [current.code, ...others]) await attempt(() => this.#fetch(code));
+      // After fetching, so a name from 1.4.0 found just now goes up straight away.
+      await attempt(() => this.#sendPendingNames());
+      if (firstProblem) throw firstProblem;
     });
   }
 
@@ -238,11 +259,42 @@ export class Friends {
     this.#pushPending.delete(code);
   }
 
-  async #fetch() {
-    const g = this.current;
+  async #sendPendingNames() {
+    let firstProblem = null;
+    for (const code of [...this.#namePending].sort()) {
+      const g = this.groups.find((g) => g.code === code);
+      if (!g) {
+        this.#namePending.delete(code);
+        continue;
+      }
+      try {
+        await this.#request('PUT', `/api/groups/${code}`, { name: g.label ?? '' }, g.token);
+        this.#namePending.delete(code);
+        const now = this.groups.find((g) => g.code === code);
+        if (now) this.#setCachedLabel(code, now.label, true);
+      } catch (e) {
+        firstProblem ??= e;
+      }
+    }
+    if (firstProblem) throw firstProblem;
+  }
+
+  async #fetch(code) {
+    const g = this.groups.find((g) => g.code === code);
     if (!g) return;
     try {
-      this.#membersByGroup.set(g.code, (await this.#request('GET', `/api/groups/${g.code}`)).members);
+      const response = await this.#request('GET', `/api/groups/${code}`);
+      this.#membersByGroup.set(code, response.members);
+      // A rename still on its way here wins over the name it's replacing.
+      if (this.#namePending.has(code)) return;
+      const now = this.groups.find((g) => g.code === code);
+      const label = now?.label ?? null;
+      if (response.name == null && label != null && !now.labelShared) {
+        // Named back when names stayed on this computer: share it now.
+        this.#namePending.add(code);
+      } else if (label !== (response.name ?? null) || !now.labelShared) {
+        this.#setCachedLabel(code, response.name ?? null, true);
+      }
     } catch (e) {
       if (e.status !== 404) throw e;
       // The group is gone from the server; nothing to stay in.

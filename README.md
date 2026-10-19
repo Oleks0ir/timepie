@@ -24,9 +24,9 @@ Click the **people button** at the top right to compare weeks with friends. One 
 
 The leaderboard ranks everyone by hours logged in the week you're viewing, and the arrows step through weeks as usual. Click a person to see their donut. **Open in Browser** shows the same leaderboard as a web page you can check from your phone.
 
-You can be in several groups at once. **Add Group** starts or joins another one, and the switcher at the top flips between them. Give each a **Group name** (only you see it) to tell them apart. Your name and **Hide my activity names** are set per group, so you can share activity names with close friends and only the coloured slices elsewhere.
+You can be in several groups at once. **Add Group** starts or joins another one, and the switcher at the top flips between them. Anyone in a group can give it a **Group name**, which everyone in it sees, on the web page too. Clear the name to show the code again. Your name and **Hide my activity names** are set per group, so you can share activity names with close friends and only the coloured slices elsewhere.
 
-What's shared: your display name and, for each of the last 12 weeks, your total and the hours per activity. Your individual entries are never shared. **Leave Group** removes you from the leaderboard of the group on screen.
+What's shared: the group's name, your display name and, for each of the last 12 weeks, your total and the hours per activity. Your individual entries are never shared. **Leave Group** removes you from the leaderboard of the group on screen.
 
 ## Building
 

@@ -21,8 +21,11 @@ final class Friends {
         var token: String
         var name: String
         var hideNames: Bool = false
-        /// What you call the group. Only this app sees it.
+        /// The group's name, shared by everyone in it, as last heard from the server.
         var label: String?
+        /// Whether `label` has been to the server. Not so for one named in 1.4.0, when names
+        /// stayed on this computer.
+        var labelShared: Bool?
 
         var id: String { code }
         var title: String {
@@ -76,6 +79,8 @@ final class Friends {
     private var pushTask: Task<Void, Never>?
     /// Groups still owed the latest summary.
     private var pushPending: Set<String> = []
+    /// Groups you renamed that the server hasn't heard about yet.
+    private var namePending: Set<String> = []
 
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? Store.defaultFileURL()
@@ -156,7 +161,7 @@ final class Friends {
         selectedCode = code
         save()
         try await push(code)
-        try await fetch()
+        try await fetch(code)
     }
 
     /// Leaves the group on screen; the next one takes its place.
@@ -175,12 +180,15 @@ final class Friends {
         update(code) { $0.name = trimmed.isEmpty ? $0.name : trimmed }
     }
 
+    /// Names the group for everyone in it. An empty name goes back to showing the code.
     func setLabel(group code: String, to label: String) {
         let trimmed = label.trimmingCharacters(in: .whitespaces)
         guard let i = groups.firstIndex(where: { $0.code == code }),
               trimmed != (groups[i].label ?? "") else { return }
         groups[i].label = trimmed.isEmpty ? nil : trimmed
         save()
+        namePending.insert(code)
+        Task { await run { try await self.sendPendingNames() } }
     }
 
     func setHideNames(_ hide: Bool, group code: String) {
@@ -203,6 +211,7 @@ final class Friends {
         groups.removeAll { $0.code == code }
         membersByGroup[code] = nil
         pushPending.remove(code)
+        namePending.remove(code)
         if selectedCode == code { selectedCode = groups.first?.code }
         save()
     }
@@ -230,16 +239,24 @@ final class Friends {
         }
     }
 
-    /// Fetches everyone's weeks in the group on screen, first sending ours to any group
-    /// an earlier push didn't get through to.
+    /// Fetches every group's weeks and name, the one on screen first, and sends anything
+    /// an earlier attempt didn't get through.
     func refresh() async {
-        guard current != nil else { return }
+        guard let current else { return }
         await run {
-            // One unreachable group shouldn't keep this one's leaderboard stale.
-            var pushProblem: Error?
-            do { try await self.pushPendingGroups() } catch { pushProblem = error }
-            try await self.fetch()
-            if let pushProblem { throw pushProblem }
+            // One unreachable group shouldn't keep the others stale.
+            var firstProblem: Error?
+            func attempt(_ work: () async throws -> Void) async {
+                do { try await work() } catch { firstProblem = firstProblem ?? error }
+            }
+            await attempt { try await self.pushPendingGroups() }
+            let others = self.groups.map(\.code).filter { $0 != current.code }
+            for code in [current.code] + others {
+                await attempt { try await self.fetch(code) }
+            }
+            // After fetching, so a name from 1.4.0 found just now goes up straight away.
+            await attempt { try await self.sendPendingNames() }
+            if let firstProblem { throw firstProblem }
         }
     }
 
@@ -270,11 +287,43 @@ final class Friends {
         pushPending.remove(code)
     }
 
-    private func fetch() async throws {
-        guard let group = current else { return }
+    private func sendPendingNames() async throws {
+        var firstProblem: Error?
+        for code in namePending.sorted() {
+            guard let group = groups.first(where: { $0.code == code }) else {
+                namePending.remove(code)
+                continue
+            }
+            do {
+                let _: Ignored = try await request("PUT", "api/groups/\(code)",
+                                                   body: ["name": group.label ?? ""], token: group.token)
+                namePending.remove(code)
+                if let i = groups.firstIndex(where: { $0.code == code }) {
+                    groups[i].labelShared = true
+                    save()
+                }
+            } catch {
+                firstProblem = firstProblem ?? error
+            }
+        }
+        if let firstProblem { throw firstProblem }
+    }
+
+    private func fetch(_ code: String) async throws {
+        guard let group = groups.first(where: { $0.code == code }) else { return }
         do {
             let response: GroupResponse = try await request("GET", "api/groups/\(group.code)")
             membersByGroup[group.code] = response.members
+            // A rename still on its way here wins over the name it's replacing.
+            guard !namePending.contains(code), let i = groups.firstIndex(where: { $0.code == code }) else { return }
+            if response.name == nil, groups[i].label != nil, groups[i].labelShared != true {
+                // Named back when names stayed on this computer: share it now.
+                namePending.insert(code)
+            } else if groups[i].label != response.name || groups[i].labelShared != true {
+                groups[i].label = response.name
+                groups[i].labelShared = true
+                save()
+            }
         } catch let problem as Problem where problem.status == 404 {
             // The group is gone from the server; nothing to stay in.
             forget(group.code)
@@ -410,6 +459,7 @@ final class Friends {
     }
 
     private struct GroupResponse: Decodable {
+        var name: String?
         var members: [Member]
     }
 

@@ -829,6 +829,14 @@ function GroupCard({ group: s }) {
   const drafts = useRef();
   drafts.current = { name, label };
 
+  // Someone else renamed the group: follow them, unless you're typing a name yourself.
+  const heardLabel = useRef(s.label ?? '');
+  useEffect(() => {
+    const now = s.label ?? '';
+    if (label === heardLabel.current) setLabel(now);
+    heardLabel.current = now;
+  }, [s.label]);
+
   // Leaving the screen, or this group, keeps what you typed, as Enter would.
   useEffect(() => () => {
     friends.rename(s.code, drafts.current.name);
@@ -859,7 +867,7 @@ function GroupCard({ group: s }) {
           title="The same leaderboard as a web page, for checking on your phone">Open in Browser</button>
       </div>
       <div class="divider" />
-      <label class="setting" title="Only you see this, to tell your groups apart">
+      <label class="setting" title="Everyone in the group sees this name">
         <span>Group name</span>
         <input class="field" placeholder=${displayCode(s.code)} value=${label}
           onInput=${(e) => setLabel(e.currentTarget.value)}

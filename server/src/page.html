@@ -93,7 +93,12 @@
     let week = mondayOf(new Date());
     const open = new Set();
 
-    document.getElementById('title').textContent = 'TIMEPIE · ' + code.slice(0, 3) + '-' + code.slice(3);
+    const showTitle = (name) => {
+      const title = name || code.slice(0, 3) + '-' + code.slice(3);
+      document.getElementById('title').textContent = 'TIMEPIE · ' + title;
+      document.title = (name ? name + ' · ' : '') + 'TimePie Leaderboard';
+    };
+    showTitle(null);
 
     function mondayOf(d) {
       const x = new Date(d);
@@ -188,7 +193,9 @@
           board.innerHTML = '<div class="empty">No group has the code ' + esc(code) + '.</div>';
           return;
         }
-        members = (await res.json()).members;
+        const group = await res.json();
+        members = group.members;
+        showTitle(group.name);
         document.getElementById('note').textContent =
           members.length + (members.length === 1 ? ' person' : ' people') + ' · updates every minute';
         render();

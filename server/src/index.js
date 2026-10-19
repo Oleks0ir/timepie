@@ -4,8 +4,9 @@
 // weeks of totals — never the entries themselves. Every push replaces a member's
 // weeks whole, so the server is a mirror of the apps, not a second source of truth.
 //
-//   POST   /api/groups                       → { code }
-//   GET    /api/groups/:code                 → { code, members: [...] }
+//   POST   /api/groups                       ← { name? } → { code }
+//   GET    /api/groups/:code                 → { code, name, members: [...] }
+//   PUT    /api/groups/:code                 (Bearer token of any member) ← { name }
 //   PUT    /api/groups/:code/members/:id     (Bearer token) ← { name, weeks }
 //   DELETE /api/groups/:code/members/:id     (Bearer token)
 //   GET    /g/:code                          → the leaderboard as a web page
@@ -20,6 +21,7 @@ const MAX_MEMBERS = 50;
 const MAX_WEEKS = 12;
 const MAX_SLICES = 60;
 const MAX_NAME = 40;
+const MAX_GROUP_NAME = 40;
 const MAX_SLICE_NAME = 60;
 
 const CORS = {
@@ -58,12 +60,13 @@ async function route(request, env, path) {
   }
   if (path[0] !== 'api' || path[1] !== 'groups') return fail(404, 'Not found.');
 
-  if (path.length === 2 && method === 'POST') return createGroup(env);
+  if (path.length === 2 && method === 'POST') return createGroup(request, env);
 
   const code = normaliseCode(path[2]);
   if (!code) return fail(404, 'No group has that code.');
 
   if (path.length === 3 && method === 'GET') return getGroup(env, code);
+  if (path.length === 3 && method === 'PUT') return renameGroup(request, env, code);
   if (path.length === 5 && path[3] === 'members') {
     const id = path[4];
     if (!/^[0-9A-Fa-f-]{36}$/.test(id)) return fail(400, 'Bad member id.');
@@ -79,14 +82,16 @@ function normaliseCode(raw) {
   return code.length === CODE_LENGTH && [...code].every((c) => ALPHABET.includes(c)) ? code : null;
 }
 
-async function createGroup(env) {
+async function createGroup(request, env) {
+  const body = await request.json().catch(() => null);
+  const name = cleanName(body?.name, MAX_GROUP_NAME);
   // A collision is about one in a billion, but retrying costs nothing.
   for (let attempt = 0; attempt < 5; attempt++) {
     const bytes = crypto.getRandomValues(new Uint8Array(CODE_LENGTH));
     const code = [...bytes].map((b) => ALPHABET[b % ALPHABET.length]).join('');
     const { meta } = await env.DB
-      .prepare('INSERT OR IGNORE INTO groups (code, created_at) VALUES (?, ?)')
-      .bind(code, new Date().toISOString())
+      .prepare('INSERT OR IGNORE INTO groups (code, name, created_at) VALUES (?, ?, ?)')
+      .bind(code, name, new Date().toISOString())
       .run();
     if (meta.changes === 1) return json({ code }, 201);
   }
@@ -94,7 +99,7 @@ async function createGroup(env) {
 }
 
 async function getGroup(env, code) {
-  const group = await env.DB.prepare('SELECT code FROM groups WHERE code = ?').bind(code).first();
+  const group = await env.DB.prepare('SELECT code, name FROM groups WHERE code = ?').bind(code).first();
   if (!group) return fail(404, 'No group has that code.');
   const { results } = await env.DB
     .prepare('SELECT id, name, weeks, updated_at FROM members WHERE group_code = ?')
@@ -102,8 +107,28 @@ async function getGroup(env, code) {
     .all();
   return json({
     code,
+    name: group.name ?? null,
     members: results.map((m) => ({ id: m.id, name: m.name, weeks: JSON.parse(m.weeks), updatedAt: m.updated_at })),
   });
+}
+
+/** Anyone in the group can name it, or clear the name with an empty one. */
+async function renameGroup(request, env, code) {
+  const tokenHash = await hashToken(request);
+  if (!tokenHash) return fail(401, 'Missing token.');
+  const group = await env.DB.prepare('SELECT code FROM groups WHERE code = ?').bind(code).first();
+  if (!group) return fail(404, 'No group has that code.');
+  const member = await env.DB
+    .prepare('SELECT id FROM members WHERE group_code = ? AND token_hash = ?')
+    .bind(code, tokenHash)
+    .first();
+  if (!member) return fail(403, 'Only people in the group can rename it.');
+
+  const body = await request.json().catch(() => null);
+  if (typeof body?.name !== 'string') throw new BadRequest('A name is needed.');
+  const name = cleanName(body.name, MAX_GROUP_NAME);
+  await env.DB.prepare('UPDATE groups SET name = ? WHERE code = ?').bind(name, code).run();
+  return json({ name });
 }
 
 async function putMember(request, env, code, id) {
