@@ -1,7 +1,7 @@
 {
   "name": "timepie",
   "productName": "TimePie",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "TimePie — a weekly time donut",
   "main": "main.js",
   "private": true,
