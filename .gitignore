@@ -2,3 +2,4 @@
 .build/
 TimePie.app
 *.zip
+*.pkg
