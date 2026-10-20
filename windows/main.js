@@ -135,16 +135,30 @@ ipcMain.handle('open:page', (_event, url) => {
  * failure: offline, or GitHub's rate limit, is no reason to bother anyone.
  * TIMEPIE_VERSION stands in for this build's version, for a test run.
  */
+/**
+ * The release notes' bullets, shortest form first: "- **Live timers.** When someone…" is
+ * just "Live timers". At most four, to fit the card.
+ */
+function highlightsOf(notes) {
+  return notes.split(/\r?\n/)
+    .map((line) => /^\s*[-*]\s+(.*)$/.exec(line)?.[1])
+    .filter(Boolean)
+    .map((text) => /^\*\*(.+?)\*\*/.exec(text)?.[1].replace(/[\s.:]+$/, '') ?? text.replace(/\*\*/g, ''))
+    .filter((text) => text.trim())
+    .slice(0, 4);
+}
+
 ipcMain.handle('update:check', async () => {
   try {
     const res = await fetch(LATEST_RELEASE, {
       headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
-    const { tag_name: tag } = await res.json();
+    const { tag_name: tag, body } = await res.json();
     return {
       current: process.env.TIMEPIE_VERSION ?? app.getVersion(),
       latest: String(tag).replace(/^v/i, ''),
+      highlights: highlightsOf(String(body ?? '')),
       page: RELEASES_PAGE,
     };
   } catch {

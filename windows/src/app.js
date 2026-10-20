@@ -360,14 +360,19 @@ function isNewer(a, b) {
   return false;
 }
 
-/** A newer TimePie is out: a small card in the corner, with the way to it and a way to close it. */
+/**
+ * A newer TimePie is out: a small card in the corner saying what's new, with the way to it
+ * and a way to close it.
+ */
 function UpdateNotice({ update, onClose }) {
   return html`
     <div class="update-notice" role="status">
       <span class="update-icon">↓</span>
       <div class="update-body">
         <div class="update-title">TimePie ${update.latest} is out</div>
-        <div class="caption">You have ${update.current}. Download the new one and replace this copy.</div>
+        ${update.highlights.length
+          ? html`<ul class="update-list">${update.highlights.map((line) => html`<li key=${line}>${line}</li>`)}</ul>`
+          : html`<div class="caption">Download the new one and replace this copy.</div>`}
         <button class="btn primary small" onClick=${() => api.openPage(update.page)}
           title="The latest release, with downloads for Mac and Windows">Open GitHub</button>
       </div>

@@ -270,6 +270,10 @@ button { font: inherit; color: inherit; cursor: default; }
 .update-body { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .update-title { font-weight: 600; font-size: 13px; }
 .update-body .btn { margin-top: 4px; }
+.update-list { margin: 0; padding: 0; list-style: none; font-size: 11px; color: var(--secondary); }
+/* Clamped to two lines, which hides list markers, so the dot is drawn by hand. */
+.update-list li { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.update-list li::before { content: '•  '; }
 .btn.primary.small { height: 24px; padding: 0 12px; font-size: 12px; }
 .update-close {
   border: 0; background: none; color: var(--muted); font-size: 11px; width: 18px; height: 18px;

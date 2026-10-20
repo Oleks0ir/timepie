@@ -122,8 +122,8 @@ struct ContentView: View {
         // word of a newer version floats in the corner above it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(alignment: .trailing, spacing: 0) {
-                if let version = updates.available, let current = updates.current, !updates.dismissed {
-                    UpdateNotice(version: version, current: current) {
+                if let version = updates.available, !updates.dismissed {
+                    UpdateNotice(version: version, highlights: updates.highlights) {
                         withAnimation(motion(Motion.snappy)) { updates.dismissed = true }
                     }
                     .padding([.horizontal, .bottom], 12)

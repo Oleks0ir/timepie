@@ -17,6 +17,8 @@ final class Updates {
         ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     /// A newer version than this one, once GitHub has said so.
     private(set) var available: String?
+    /// What's new in it, a few words each, from its release notes.
+    private(set) var highlights: [String] = []
     /// Closed for now. It's back next launch, until you've updated.
     var dismissed = false
 
@@ -38,7 +40,25 @@ final class Updates {
               let (data, _) = try? await URLSession.shared.data(for: req),
               let release = try? JSONDecoder().decode(Release.self, from: data) else { return }
         let latest = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-        if Updates.isNewer(latest, than: current) { available = latest }
+        guard Updates.isNewer(latest, than: current) else { return }
+        highlights = Updates.highlights(from: release.body ?? "")
+        available = latest
+    }
+
+    /// The release notes' bullets, shortest form first: "- **Live timers.** When someone…"
+    /// is just "Live timers". At most four, to fit the card.
+    nonisolated static func highlights(from notes: String) -> [String] {
+        let bullets = notes.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+            let line = line.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("- ") || line.hasPrefix("* ") else { return nil }
+            let text = line.dropFirst(2)
+            if text.hasPrefix("**"), let close = text.dropFirst(2).range(of: "**") {
+                return String(text[text.index(text.startIndex, offsetBy: 2)..<close.lowerBound])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " .:"))
+            }
+            return text.replacingOccurrences(of: "**", with: "")
+        }
+        return Array(bullets.filter { !$0.isEmpty }.prefix(4))
     }
 
     /// "1.10.0" is newer than "1.9.2": compared number by number, not as text.
@@ -54,6 +74,7 @@ final class Updates {
 
     private struct Release: Decodable {
         let tagName: String
-        enum CodingKeys: String, CodingKey { case tagName = "tag_name" }
+        let body: String?
+        enum CodingKeys: String, CodingKey { case tagName = "tag_name", body }
     }
 }

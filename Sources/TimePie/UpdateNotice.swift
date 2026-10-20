@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// A newer TimePie is out: a small card in the corner, with the way to it and a way to close it.
+/// A newer TimePie is out: a small card in the corner saying what's new, with the way
+/// to it and a way to close it.
 struct UpdateNotice: View {
     let version: String
-    let current: String
+    let highlights: [String]
     let onClose: () -> Void
 
     var body: some View {
@@ -15,13 +16,26 @@ struct UpdateNotice: View {
                 .symbolRenderingMode(.hierarchical)
 
             VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("TimePie \(version) is out")
                         .font(.callout.weight(.semibold))
-                    Text("You have \(current). Download the new one and replace this copy.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if highlights.isEmpty {
+                        Text("Download the new one and replace this copy.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        ForEach(highlights, id: \.self) { line in
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                Text("•")
+                                Text(line)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Button("Open GitHub") { NSWorkspace.shared.open(Updates.releasesPage) }
                     .buttonStyle(.borderedProminent)
