@@ -68,6 +68,16 @@
     .slice .hidden { color: var(--muted); font-style: italic; }
     .note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 16px; }
     .empty { text-align: center; color: var(--muted); padding: 28px 12px; }
+    /* A timer running right now. */
+    .live {
+      display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 55%;
+      padding: 2px 8px; border-radius: 999px; background: var(--divider); font-size: 12px; color: var(--secondary);
+    }
+    .live .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; animation: pulse 1.6s ease-in-out infinite; }
+    .live .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .live .clock { font-variant-numeric: tabular-nums; }
+    @keyframes pulse { 50% { opacity: 0.35; } }
+    @media (prefers-reduced-motion: reduce) { .live .dot { animation: none; } }
     svg { display: block; flex: none; }
   </style>
 </head>
@@ -90,6 +100,8 @@
     const code = location.pathname.split('/').filter(Boolean)[1].toUpperCase().replace(/[^A-Z0-9]/g, '');
     const board = document.getElementById('board');
     let members = null;
+    /** When `members` came from the server, so running timers count up from there. */
+    let fetchedAt = 0;
     let week = mondayOf(new Date());
     const open = new Set();
 
@@ -122,6 +134,20 @@
       const m = Math.max(0, minutes), h = Math.floor(m / 60), r = m % 60;
       if (h === 0) return r + 'm';
       return r === 0 ? h + 'h' : h + 'h ' + r + 'm';
+    }
+
+    /** A running stopwatch: "12:34", or "1:02:15" once it passes an hour. */
+    function clock(seconds) {
+      const s = Math.max(0, seconds), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+      return (h > 0 ? h + ':' + pad(m) : m) + ':' + pad(s % 60);
+    }
+
+    function liveBadge(live) {
+      if (!live) return '';
+      const seconds = live.seconds + Math.floor((Date.now() - fetchedAt) / 1000);
+      return '<span class="live" title="Timing this right now"><span class="dot" style="background:' + color(live.colorSlot) + '"></span>' +
+        (live.name == null ? '' : '<span class="what">' + esc(live.name) + '</span>') +
+        '<span class="clock">' + clock(seconds) + '</span></span>';
     }
 
     const color = (slot) => 'var(--c' + (slot >= 0 && slot < 8 ? slot : 8) + ')';
@@ -170,7 +196,7 @@
           '<button class="summary" data-id="' + m.id + '">' +
           '<span class="rank ' + (place === 1 && !zero ? 'first' : '') + '">' + (zero ? '–' : place) + '</span>' +
           donut(m.w.slices, 26) +
-          '<span class="name">' + esc(m.name) + '</span>' +
+          '<span class="name">' + esc(m.name) + '</span>' + liveBadge(m.live) +
           '<span class="total">' + duration(m.w.total) + '</span></button>' +
           (open.has(m.id) && !zero ? '<div class="detail">' + donut(m.w.slices, 110) + '<div class="slices">' + rows + '</div></div>' : '') +
           '</div>';
@@ -195,9 +221,10 @@
         }
         const group = await res.json();
         members = group.members;
+        fetchedAt = Date.now();
         showTitle(group.name);
         document.getElementById('note').textContent =
-          members.length + (members.length === 1 ? ' person' : ' people') + ' · updates every minute';
+          members.length + (members.length === 1 ? ' person' : ' people') + ' · updates every 30 seconds';
         render();
       } catch {
         document.getElementById('note').textContent = 'Couldn’t reach the server. Retrying…';
@@ -206,7 +233,9 @@
 
     render();
     load();
-    setInterval(load, 60000);
+    setInterval(load, 30000);
+    // Running timers tick between fetches.
+    setInterval(() => { if (members?.some((m) => m.live)) render(); }, 1000);
   </script>
 </body>
 </html>

@@ -137,12 +137,15 @@ struct ContentView: View {
         // Every change goes out to the group, if you're in one.
         .onAppear { friends.storeChanged(store, after: 0, force: true) }
         .onChange(of: store.revision) { friends.storeChanged(store) }
+        // So does a running timer, renamed or recoloured along with its activity.
+        .onChange(of: sharedTimer) { friends.setTimer(sharedTimer) }
         // The leaderboard keeps itself current while it's on screen.
         .task(id: showingFriends) {
             guard showingFriends else { return }
             while !Task.isCancelled {
                 await friends.refresh()
-                try? await Task.sleep(for: .seconds(60))
+                // Often enough to catch a friend starting a timer.
+                try? await Task.sleep(for: .seconds(30))
             }
         }
         .onReceive(tick) { instant in
@@ -427,6 +430,13 @@ struct ContentView: View {
         // Anything under half a minute rounds to nothing and isn't worth an entry.
         guard minutes > 0 else { return }
         store.add(minutes: minutes, to: timer.activityID, on: timer.day)
+    }
+
+    /// The running timer as the group sees it.
+    private var sharedTimer: Friends.MyTimer? {
+        guard let timer = running,
+              let activity = store.activities.first(where: { $0.id == timer.activityID }) else { return nil }
+        return Friends.MyTimer(name: activity.name, colorSlot: activity.colorSlot, startedAt: timer.startedAt)
     }
 
     private func elapsedSeconds(for id: UUID) -> Int {

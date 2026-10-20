@@ -8,6 +8,7 @@
 //   GET    /api/groups/:code                 → { code, name, members: [...] }
 //   PUT    /api/groups/:code                 (Bearer token of any member) ← { name }
 //   PUT    /api/groups/:code/members/:id     (Bearer token) ← { name, weeks }
+//   PUT    /api/groups/:code/members/:id/live (Bearer token) ← { live: { name, colorSlot, seconds } | null }
 //   DELETE /api/groups/:code/members/:id     (Bearer token)
 //   GET    /g/:code                          → the leaderboard as a web page
 
@@ -23,6 +24,8 @@ const MAX_SLICES = 60;
 const MAX_NAME = 40;
 const MAX_GROUP_NAME = 40;
 const MAX_SLICE_NAME = 60;
+/** A running timer is re-sent every minute; one not heard from in this long has died with its app. */
+const LIVE_TIMEOUT_MS = 150 * 1000;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -73,6 +76,11 @@ async function route(request, env, path) {
     if (method === 'PUT') return putMember(request, env, code, id.toUpperCase());
     if (method === 'DELETE') return deleteMember(request, env, code, id.toUpperCase());
   }
+  if (path.length === 6 && path[3] === 'members' && path[5] === 'live' && method === 'PUT') {
+    const id = path[4];
+    if (!/^[0-9A-Fa-f-]{36}$/.test(id)) return fail(400, 'Bad member id.');
+    return putLive(request, env, code, id.toUpperCase());
+  }
   return fail(404, 'Not found.');
 }
 
@@ -102,14 +110,28 @@ async function getGroup(env, code) {
   const group = await env.DB.prepare('SELECT code, name FROM groups WHERE code = ?').bind(code).first();
   if (!group) return fail(404, 'No group has that code.');
   const { results } = await env.DB
-    .prepare('SELECT id, name, weeks, updated_at FROM members WHERE group_code = ?')
+    .prepare('SELECT id, name, weeks, updated_at, live, live_since, live_seen FROM members WHERE group_code = ?')
     .bind(code)
     .all();
+  const now = Date.now();
   return json({
     code,
     name: group.name ?? null,
-    members: results.map((m) => ({ id: m.id, name: m.name, weeks: JSON.parse(m.weeks), updatedAt: m.updated_at })),
+    members: results.map((m) => ({
+      id: m.id, name: m.name, weeks: JSON.parse(m.weeks), updatedAt: m.updated_at, live: liveOf(m, now),
+    })),
   });
+}
+
+/**
+ * A member's running timer, with how long it's been going by the server's clock, so
+ * nobody's clock has to agree with anybody else's.
+ */
+function liveOf(m, now) {
+  if (!m.live || !m.live_since || !m.live_seen) return null;
+  if (now - Date.parse(m.live_seen) > LIVE_TIMEOUT_MS) return null;
+  const { name, colorSlot } = JSON.parse(m.live);
+  return { name, colorSlot, seconds: Math.max(0, Math.floor((now - Date.parse(m.live_since)) / 1000)) };
 }
 
 /** Anyone in the group can name it, or clear the name with an empty one. */
@@ -162,6 +184,38 @@ async function putMember(request, env, code, id) {
               ON CONFLICT (group_code, id) DO UPDATE
               SET name = excluded.name, weeks = excluded.weeks, updated_at = excluded.updated_at`)
     .bind(code, id, tokenHash, name, JSON.stringify(weeks), new Date().toISOString())
+    .run();
+  return json({ ok: true });
+}
+
+/** Starts, keeps alive, or stops a member's running timer. */
+async function putLive(request, env, code, id) {
+  const tokenHash = await hashToken(request);
+  if (!tokenHash) return fail(401, 'Missing token.');
+  const member = await env.DB
+    .prepare('SELECT token_hash FROM members WHERE group_code = ? AND id = ?')
+    .bind(code, id)
+    .first();
+  if (!member) return fail(404, 'Not in that group.');
+  if (member.token_hash !== tokenHash) return fail(403, 'That member belongs to someone else.');
+
+  const body = await request.json().catch(() => null);
+  const live = body?.live;
+  if (live == null) {
+    await env.DB.prepare('UPDATE members SET live = NULL, live_since = NULL, live_seen = NULL WHERE group_code = ? AND id = ?')
+      .bind(code, id).run();
+    return json({ ok: true });
+  }
+  const seconds = live.seconds;
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > 7 * 24 * 3600 || !Number.isInteger(live.colorSlot)) {
+    throw new BadRequest('Bad timer.');
+  }
+  const now = Date.now();
+  const name = live.name == null ? null : cleanName(live.name, MAX_SLICE_NAME);
+  await env.DB
+    .prepare('UPDATE members SET live = ?, live_since = ?, live_seen = ? WHERE group_code = ? AND id = ?')
+    .bind(JSON.stringify({ name, colorSlot: live.colorSlot }), new Date(now - seconds * 1000).toISOString(),
+      new Date(now).toISOString(), code, id)
     .run();
   return json({ ok: true });
 }

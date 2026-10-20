@@ -248,6 +248,14 @@ button { font: inherit; color: inherit; cursor: default; }
 .standing .you { font-size: 11px; color: var(--secondary); }
 .standing-total { color: var(--secondary); }
 .standing.zero .name, .standing.zero .standing-total { color: var(--muted); }
+.live {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 45%;
+  padding: 2px 8px; border-radius: 999px; background: var(--hover-strong); font-size: 12px; color: var(--secondary);
+}
+.live .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; animation: pulse 1.6s ease-in-out infinite; }
+.live .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .live .dot { animation: none; } }
 .board-note { text-align: center; color: var(--secondary); padding: 12px; }
 
 .breakdown { display: flex; align-items: center; gap: 20px; padding: 2px 12px 12px 42px; }
@@ -269,6 +277,7 @@ button { font: inherit; color: inherit; cursor: default; }
 
 .group-card { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .group-head { display: flex; align-items: center; gap: 8px; }
+.chevron.flipped { transform: rotate(180deg); }
 .group-head .code { font: 600 17px ui-monospace, Consolas, monospace; user-select: text; }
 .group-foot { display: flex; align-items: center; gap: 8px; }
 .setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

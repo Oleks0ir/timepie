@@ -86,11 +86,20 @@ function App() {
     return () => clearInterval(t);
   }, [running]);
 
-  // The leaderboard keeps itself current while it's on screen.
+  // The groups see a running timer, renamed or recoloured along with its activity.
+  const runningActivity = running && store.activities.find((a) => a.id === running.activityID);
+  useEffect(() => {
+    friends.setTimer(runningActivity
+      ? { name: runningActivity.name, colorSlot: runningActivity.colorSlot, startedAt: running.startedAt }
+      : null);
+  }, [runningActivity?.name, runningActivity?.colorSlot, running?.startedAt]);
+
+  // The leaderboard keeps itself current while it's on screen, often enough to catch a
+  // friend starting a timer.
   useEffect(() => {
     if (!showingFriends) return;
     friends.refresh();
-    const t = setInterval(() => friends.refresh(), 60000);
+    const t = setInterval(() => friends.refresh(), 30000);
     return () => clearInterval(t);
   }, [showingFriends]);
 
@@ -790,6 +799,7 @@ function Leaderboard({ standings }) {
             <${Donut} slices=${slicesOf(s)} size=${22} compact />
             <span class="name ${s.isMe ? 'me' : ''}">${s.name}</span>
             ${s.isMe && html`<span class="you">You</span>`}
+            ${s.live && html`<${LiveBadge} live=${s.live} />`}
             <span class="spacer" />
             <span class="standing-total num">${Duration.format(s.total)}</span>
           </div>
@@ -798,6 +808,22 @@ function Leaderboard({ standings }) {
       ${standings.length === 1 && html`
         <div class="board-note">Nobody else is here yet. Send your friends the group code below.</div>`}
     </div>
+  `;
+}
+
+/** A timer someone has running right now, counting up. */
+function LiveBadge({ live }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return html`
+    <span class="live" title="Timing this right now">
+      <span class="dot" style=${{ background: slotColor(live.colorSlot) }} />
+      ${live.name != null && html`<span class="what">${live.name}</span>`}
+      <span class="num">${Duration.clock(Math.floor((now - live.startedAt) / 1000))}</span>
+    </span>
   `;
 }
 
@@ -820,9 +846,13 @@ function Breakdown({ standing }) {
   `;
 }
 
-/** The group on screen, how you appear in it, and the way out. */
+/**
+ * The group on screen, how you appear in it, and the way out. Only the code shows until
+ * you open the settings.
+ */
 function GroupCard({ group: s }) {
   const friends = useFriends();
+  const [showingSettings, setShowingSettings] = useState(false);
   const [name, setName] = useState(s.name);
   const [label, setLabel] = useState(s.label ?? '');
   const [copied, setCopied] = useState(false);
@@ -837,11 +867,17 @@ function GroupCard({ group: s }) {
     heardLabel.current = now;
   }, [s.label]);
 
-  // Leaving the screen, or this group, keeps what you typed, as Enter would.
-  useEffect(() => () => {
+  const commitDrafts = () => {
     friends.rename(s.code, drafts.current.name);
     friends.setLabel(s.code, drafts.current.label);
-  }, []);
+  };
+  // Leaving the screen, or this group, keeps what you typed, as Enter would.
+  useEffect(() => commitDrafts, []);
+  // So does closing the settings.
+  const toggleSettings = () => {
+    if (showingSettings) commitDrafts();
+    setShowingSettings(!showingSettings);
+  };
 
   const copy = () => {
     api.copy(displayCode(s.code));
@@ -865,7 +901,12 @@ function GroupCard({ group: s }) {
         <button class="btn" onClick=${copy}>${copied ? 'Copied' : 'Copy Code'}</button>
         <button class="btn" onClick=${() => api.openPage(friends.pageURL)}
           title="The same leaderboard as a web page, for checking on your phone">Open in Browser</button>
+        <button class="btn icon" onClick=${toggleSettings}
+          title=${showingSettings ? 'Hide group settings' : 'Group name, your name, and leaving'}>
+          <span class="chevron ${showingSettings ? 'flipped' : ''}"><${Chevron} dir="down" /></span>
+        </button>
       </div>
+      ${showingSettings && html`
       <div class="divider" />
       <label class="setting" title="Everyone in the group sees this name">
         <span>Group name</span>
@@ -884,10 +925,10 @@ function GroupCard({ group: s }) {
           onChange=${(e) => friends.setHideNames(s.code, e.currentTarget.checked)} />
       </label>
       <div class="group-foot">
-        <span class="caption">Shared: your name and the last 12 weeks’ totals per activity.</span>
+        <span class="caption">Shared: your name, the last 12 weeks’ totals per activity, and a running timer.</span>
         <span class="spacer" />
         <button class="btn danger" onClick=${leave}>Leave Group</button>
-      </div>
+      </div>`}
     </div>
   `;
 }

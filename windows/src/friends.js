@@ -9,6 +9,11 @@ import * as W from './model.js';
 
 export const SERVER = 'https://timepie-friends.timepie.workers.dev';
 const WEEKS_SHARED = 12;
+/**
+ * How often a running timer tells the groups it's still going. The server forgets one it
+ * hasn't heard from in a while, so a timer that dies with its app doesn't linger.
+ */
+const LIVE_HEARTBEAT = 60000;
 
 /** "ABCDEF" reads as "ABC-DEF". */
 export const displayCode = (code) => (code.length === 6 ? `${code.slice(0, 3)}-${code.slice(3)}` : code);
@@ -37,6 +42,8 @@ export class Friends {
   working = false;
   /** What this app would send right now, names and all. Your own row is drawn from this. */
   mine = [];
+  /** The timer running here as { name, colorSlot, startedAt }, shown on your own row and sent to each group. */
+  myTimer = null;
   #membersByGroup = new Map();
   #persist;
   #listeners = new Set();
@@ -45,6 +52,9 @@ export class Friends {
   #pushPending = new Set();
   /** Groups you renamed that the server hasn't heard about yet. */
   #namePending = new Set();
+  #liveTimer = null;
+  /** The last timer update sent, so one in flight can't land after a stop. */
+  #liveSending = Promise.resolve();
 
   constructor(json, persist) {
     this.#persist = persist;
@@ -128,6 +138,7 @@ export class Friends {
     this.selectedCode = code;
     this.#save();
     await this.#push(code);
+    if (this.myTimer) await this.#sendLive([code]);
     await this.#fetch(code);
   }
 
@@ -169,6 +180,7 @@ export class Friends {
 
   setHideNames(code, hide) {
     this.#update(code, { hideNames: hide });
+    if (this.myTimer) this.#sendLive([code]);
   }
 
   /** Changes what a group sees of you, and tells it. */
@@ -210,6 +222,41 @@ export class Friends {
     if (this.#pushPending.size === 0) return;
     clearTimeout(this.#pushTimer);
     this.#pushTimer = setTimeout(() => this.#run(() => this.#pushPendingGroups()), delay);
+  }
+
+  /**
+   * Starts or stops showing your running timer to every group. While it runs it's re-sent
+   * every so often; stopping it is sent at once. Nothing here goes through `problem`: a
+   * missed beat is made up by the next one.
+   */
+  setTimer(timer) {
+    const same = (a, b) => a?.name === b?.name && a?.colorSlot === b?.colorSlot && a?.startedAt === b?.startedAt;
+    if (same(timer, this.myTimer)) return;
+    this.myTimer = timer;
+    this.#changed();
+    clearInterval(this.#liveTimer);
+    this.#liveTimer = null;
+    const beat = () => this.#sendLive(this.groups.map((g) => g.code));
+    beat();
+    if (timer) this.#liveTimer = setInterval(beat, LIVE_HEARTBEAT);
+  }
+
+  #sendLive(codes) {
+    // One after another, so a beat still in flight can't land after a stop.
+    this.#liveSending = this.#liveSending.then(async () => {
+      for (const code of codes) {
+        const g = this.groups.find((g) => g.code === code);
+        if (!g) continue;
+        const t = this.myTimer;
+        const live = t && {
+          name: g.hideNames ? null : t.name, colorSlot: t.colorSlot,
+          seconds: Math.max(0, Math.floor((Date.now() - t.startedAt) / 1000)),
+        };
+        await this.#request('PUT', `/api/groups/${code}/members/${g.memberID}/live`, { live: live ?? null }, g.token)
+          .catch(() => {});
+      }
+    });
+    return this.#liveSending;
   }
 
   /**
@@ -284,7 +331,11 @@ export class Friends {
     if (!g) return;
     try {
       const response = await this.#request('GET', `/api/groups/${code}`);
-      this.#membersByGroup.set(code, response.members);
+      // Running timers count up from when they started on this computer's clock, so the
+      // clocks never have to agree.
+      const now = Date.now();
+      this.#membersByGroup.set(code, response.members.map((m) => (m.live
+        ? { ...m, live: { ...m.live, startedAt: now - m.live.seconds * 1000 } } : m)));
       // A rename still on its way here wins over the name it's replacing.
       if (this.#namePending.has(code)) return;
       const now = this.groups.find((g) => g.code === code);
@@ -305,16 +356,20 @@ export class Friends {
 
   /**
    * Everyone in the group on screen for one week, highest total first, each as
-   * { id, name, isMe, week, total, place }. Your own row uses what's on this computer.
+   * { id, name, isMe, week, live, total, place }. Your own row uses what's on this computer.
    */
   standings(weekDate) {
     const key = W.DayStamp.string(W.weekStart(weekDate));
     const g = this.current;
     const rows = this.members.filter((m) => m.id !== g?.memberID)
-      .map((m) => ({ id: m.id, name: m.name, isMe: false, week: m.weeks.find((w) => w.week === key) ?? null }));
+      .map((m) => ({
+        id: m.id, name: m.name, isMe: false, week: m.weeks.find((w) => w.week === key) ?? null, live: m.live ?? null,
+      }));
     if (g) {
       const weeks = g.hideNames ? hidingNames(this.mine) : this.mine;
-      rows.push({ id: g.memberID, name: g.name, isMe: true, week: weeks.find((w) => w.week === key) ?? null });
+      const t = this.myTimer;
+      const live = t && { name: g.hideNames ? null : t.name, colorSlot: t.colorSlot, startedAt: t.startedAt };
+      rows.push({ id: g.memberID, name: g.name, isMe: true, week: weeks.find((w) => w.week === key) ?? null, live });
     }
     rows.forEach((r) => { r.total = r.week?.total ?? 0; });
     rows.sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));

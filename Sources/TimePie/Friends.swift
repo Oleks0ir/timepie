@@ -58,11 +58,34 @@ final class Friends {
         var id: String
         var name: String
         var weeks: [WeekSummary]
+        var live: Live?
+    }
+
+    /// A timer someone has running right now.
+    struct Live: Codable, Equatable {
+        /// Nil when its owner keeps their activity names to themselves.
+        var name: String?
+        var colorSlot: Int
+        /// How long it had run when the server answered, by the server's clock.
+        var seconds: Int
+        /// When it started on this computer's clock. Filled in on arrival, so the clocks
+        /// never have to agree.
+        var startedAt: Date?
+    }
+
+    /// The timer running in this app, if any.
+    struct MyTimer: Equatable {
+        var name: String
+        var colorSlot: Int
+        var startedAt: Date
     }
 
     static let server = URL(string: ProcessInfo.processInfo.environment["TIMEPIE_SERVER"]
                             ?? "https://timepie-friends.timepie.workers.dev")!
     private static let weeksShared = 12
+    /// How often a running timer tells the groups it's still going. The server forgets one
+    /// it hasn't heard from in a while, so a timer that dies with its app doesn't linger.
+    private static let liveHeartbeat: Swift.Duration = .seconds(60)
 
     private(set) var groups: [Membership] = []
     /// The group on screen.
@@ -74,6 +97,8 @@ final class Friends {
     /// What this app would send right now, names and all. Your own row is drawn from
     /// this rather than the server's copy, so it's never a push behind.
     private(set) var mine: [WeekSummary] = []
+    /// The timer running here, shown on your own row and sent to each group.
+    private(set) var myTimer: MyTimer?
 
     private let fileURL: URL
     private var pushTask: Task<Void, Never>?
@@ -81,6 +106,7 @@ final class Friends {
     private var pushPending: Set<String> = []
     /// Groups you renamed that the server hasn't heard about yet.
     private var namePending: Set<String> = []
+    private var liveTask: Task<Void, Never>?
 
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? Store.defaultFileURL()
@@ -161,6 +187,7 @@ final class Friends {
         selectedCode = code
         save()
         try await push(code)
+        if myTimer != nil { await sendLive(to: [code]) }
         try await fetch(code)
     }
 
@@ -193,6 +220,7 @@ final class Friends {
 
     func setHideNames(_ hide: Bool, group code: String) {
         update(code) { $0.hideNames = hide }
+        if myTimer != nil { Task { await sendLive(to: [code]) } }
     }
 
     /// Changes what a group sees of you, and tells it.
@@ -236,6 +264,38 @@ final class Friends {
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             await run { try await self.pushPendingGroups() }
+        }
+    }
+
+    /// Starts or stops showing your running timer to every group. While it runs it's re-sent
+    /// every so often; stopping it is sent at once. Nothing here goes through `problem`:
+    /// a missed beat is made up by the next one.
+    func setTimer(_ timer: MyTimer?) {
+        guard timer != myTimer else { return }
+        myTimer = timer
+        // Waits out the one before, so a beat still in flight can't land after a stop.
+        let previous = liveTask
+        previous?.cancel()
+        liveTask = Task {
+            await previous?.value
+            while !Task.isCancelled {
+                await sendLive(to: groups.map(\.code))
+                guard myTimer != nil else { return }
+                try? await Task.sleep(for: Friends.liveHeartbeat)
+            }
+        }
+    }
+
+    private func sendLive(to codes: [String]) async {
+        for code in codes {
+            guard let group = groups.first(where: { $0.code == code }) else { continue }
+            let live = myTimer.map {
+                Live(name: group.hideNames ? nil : $0.name, colorSlot: $0.colorSlot,
+                     seconds: max(0, Int(Date().timeIntervalSince($0.startedAt))))
+            }
+            _ = try? await request(
+                "PUT", "api/groups/\(code)/members/\(group.memberID.uuidString)/live",
+                body: LiveBody(live: live), token: group.token) as Ignored
         }
     }
 
@@ -313,7 +373,14 @@ final class Friends {
         guard let group = groups.first(where: { $0.code == code }) else { return }
         do {
             let response: GroupResponse = try await request("GET", "api/groups/\(group.code)")
-            membersByGroup[group.code] = response.members
+            let now = Date()
+            membersByGroup[group.code] = response.members.map { member in
+                var member = member
+                if let seconds = member.live?.seconds {
+                    member.live?.startedAt = now.addingTimeInterval(-Double(seconds))
+                }
+                return member
+            }
             // A rename still on its way here wins over the name it's replacing.
             guard !namePending.contains(code), let i = groups.firstIndex(where: { $0.code == code }) else { return }
             if response.name == nil, groups[i].label != nil, groups[i].labelShared != true {
@@ -338,12 +405,16 @@ final class Friends {
         let me = current?.memberID.uuidString
         var rows = members.filter { $0.id != me }.map {
             Standing(id: $0.id, name: $0.name, isMe: false,
-                     week: $0.weeks.first { $0.week == key })
+                     week: $0.weeks.first { $0.week == key }, live: $0.live)
         }
         if let group = current {
             let weeks = group.hideNames ? Friends.hidingNames(mine) : mine
+            let live = myTimer.map {
+                Live(name: group.hideNames ? nil : $0.name, colorSlot: $0.colorSlot,
+                     seconds: 0, startedAt: $0.startedAt)
+            }
             rows.append(Standing(id: group.memberID.uuidString, name: group.name, isMe: true,
-                                 week: weeks.first { $0.week == key }))
+                                 week: weeks.first { $0.week == key }, live: live))
         }
         rows.sort {
             $0.total != $1.total ? $0.total > $1.total
@@ -363,6 +434,7 @@ final class Friends {
         let name: String
         let isMe: Bool
         let week: WeekSummary?
+        let live: Live?
         var place: Int?
 
         var total: Int { week?.total ?? 0 }
@@ -466,6 +538,26 @@ final class Friends {
     private struct PushBody: Encodable {
         var name: String
         var weeks: [WeekSummary]
+    }
+
+    private struct LiveBody: Encodable {
+        var live: Live?
+
+        // Encoded by hand so a stopped timer goes out as an explicit null, and the start
+        // time on this computer's clock stays here.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            if let live {
+                var inner = c.nestedContainer(keyedBy: LiveKeys.self, forKey: .live)
+                try inner.encode(live.name, forKey: .name)
+                try inner.encode(live.colorSlot, forKey: .colorSlot)
+                try inner.encode(live.seconds, forKey: .seconds)
+            } else {
+                try c.encodeNil(forKey: .live)
+            }
+        }
+        private enum CodingKeys: String, CodingKey { case live }
+        private enum LiveKeys: String, CodingKey { case name, colorSlot, seconds }
     }
 
     /// A response whose body doesn't matter.

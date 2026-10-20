@@ -97,6 +97,10 @@ private struct Leaderboard: View {
             }
             .foregroundStyle(standing.total == 0 ? .secondary : .primary)
 
+            if let live = standing.live {
+                LiveBadge(live: live)
+            }
+
             Spacer(minLength: 8)
 
             Text(Duration.format(minutes: standing.total))
@@ -117,6 +121,43 @@ private struct Leaderboard: View {
             }
         }
         .help(standing.total > 0 ? "Click to see their week" : "Nothing logged this week")
+    }
+}
+
+/// A timer someone has running right now, counting up.
+private struct LiveBadge: View {
+    let live: Friends.Live
+
+    @State private var dim = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Palette.color(slot: live.colorSlot))
+                .frame(width: 7, height: 7)
+                .opacity(dim ? 0.35 : 1)
+            if let name = live.name {
+                Text(name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(Duration.clock(seconds: Int(context.date.timeIntervalSince(live.startedAt ?? context.date))))
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .layoutPriority(-1)
+        .help("Timing this right now")
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
+        }
     }
 }
 
@@ -199,12 +240,15 @@ private struct GroupPicker: View {
     }
 }
 
-/// The group on screen, how you appear in it, and the way out.
+/// The group on screen, how you appear in it, and the way out. Only the code shows
+/// until you open the settings.
 private struct GroupCard: View {
     let group: Friends.Membership
 
     @Environment(Friends.self) private var friends
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var showingSettings = false
     @State private var nameDraft = ""
     @State private var labelDraft = ""
     @State private var confirmingLeave = false
@@ -227,8 +271,43 @@ private struct GroupCard: View {
                     Button("Open in Browser") { NSWorkspace.shared.open(url) }
                         .help("The same leaderboard as a web page, for checking on your phone")
                 }
+                Button {
+                    // Closing keeps what you typed, as Return would.
+                    if showingSettings { commitDrafts() }
+                    withAnimation(reduceMotion ? Motion.reduced : Motion.snappy) { showingSettings.toggle() }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(showingSettings ? 180 : 0))
+                }
+                .help(showingSettings ? "Hide group settings" : "Group name, your name, and leaving")
             }
 
+            if showingSettings {
+                settings
+                    .transition(.opacity.combined(with: .offset(y: -6)))
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
+        .onAppear {
+            nameDraft = group.name
+            labelDraft = group.label ?? ""
+        }
+        // Someone else renamed the group: follow them, unless you're typing a name yourself.
+        .onChange(of: group.label) { old, new in
+            if labelDraft == (old ?? "") { labelDraft = new ?? "" }
+        }
+        // Leaving the screen, or this group, keeps what you typed, as Return would.
+        .onDisappear(perform: commitDrafts)
+        .confirmationDialog("Leave \(group.title)?", isPresented: $confirmingLeave) {
+            Button("Leave Group", role: .destructive) { Task { await friends.leave() } }
+        } message: {
+            Text("Your weeks are removed from its leaderboard. You can join again with the code.")
+        }
+    }
+
+    private var settings: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Divider()
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
@@ -258,33 +337,18 @@ private struct GroupCard: View {
             .help("Friends still see your total and the coloured slices, but not what they're called")
 
             HStack {
-                Text("Shared: your name and the last 12 weeks’ totals per activity.")
+                Text("Shared: your name, the last 12 weeks’ totals per activity, and a running timer.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Leave Group", role: .destructive) { confirmingLeave = true }
             }
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.quinary))
-        .onAppear {
-            nameDraft = group.name
-            labelDraft = group.label ?? ""
-        }
-        // Someone else renamed the group: follow them, unless you're typing a name yourself.
-        .onChange(of: group.label) { old, new in
-            if labelDraft == (old ?? "") { labelDraft = new ?? "" }
-        }
-        // Leaving the screen, or this group, keeps what you typed, as Return would.
-        .onDisappear {
-            friends.rename(group: group.code, to: nameDraft)
-            friends.setLabel(group: group.code, to: labelDraft)
-        }
-        .confirmationDialog("Leave \(group.title)?", isPresented: $confirmingLeave) {
-            Button("Leave Group", role: .destructive) { Task { await friends.leave() } }
-        } message: {
-            Text("Your weeks are removed from its leaderboard. You can join again with the code.")
-        }
+    }
+
+    private func commitDrafts() {
+        friends.rename(group: group.code, to: nameDraft)
+        friends.setLabel(group: group.code, to: labelDraft)
     }
 
     private func copy(_ code: String) {
