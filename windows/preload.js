@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('timepie', {
   saveFriends: (json) => ipcRenderer.invoke('friends:save', json),
   openPage: (url) => ipcRenderer.invoke('open:page', url),
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
 });

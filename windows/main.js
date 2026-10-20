@@ -121,9 +121,35 @@ ipcMain.handle('friends:save', (_event, json) => {
   fs.renameSync(friendsFile + '.tmp', friendsFile);
 });
 
-// Only ever the leaderboard's own web page.
+const RELEASES_PAGE = 'https://github.com/kravchenkonikolai05/timepie/releases/latest';
+const LATEST_RELEASE = 'https://api.github.com/repos/kravchenkonikolai05/timepie/releases/latest';
+
+// Only ever the leaderboard's own web page, or the latest release.
 ipcMain.handle('open:page', (_event, url) => {
-  if (url.startsWith('https://timepie-friends.timepie.workers.dev/')) shell.openExternal(url);
+  if (url.startsWith('https://timepie-friends.timepie.workers.dev/') || url === RELEASES_PAGE) shell.openExternal(url);
+});
+
+/**
+ * This build's version and the latest release's, for the reminder to update. Asked from
+ * here rather than the page, which may only talk to the friends server. Null on any
+ * failure: offline, or GitHub's rate limit, is no reason to bother anyone.
+ * TIMEPIE_VERSION stands in for this build's version, for a test run.
+ */
+ipcMain.handle('update:check', async () => {
+  try {
+    const res = await fetch(LATEST_RELEASE, {
+      headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const { tag_name: tag } = await res.json();
+    return {
+      current: process.env.TIMEPIE_VERSION ?? app.getVersion(),
+      latest: String(tag).replace(/^v/i, ''),
+      page: RELEASES_PAGE,
+    };
+  } catch {
+    return null;
+  }
 });
 
 ipcMain.handle('clipboard:write', (_event, text) => clipboard.writeText(String(text)));

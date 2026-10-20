@@ -4,6 +4,7 @@ import Combine
 struct ContentView: View {
     @Environment(Store.self) private var store
     @Environment(Friends.self) private var friends
+    @Environment(Updates.self) private var updates
 
     /// The week being viewed. Past weeks are fully editable — arrow back and log into them.
     @State private var viewedWeek = WeekMath.weekStart(for: Date())
@@ -117,16 +118,27 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .onTapGesture { rootFocused = true }
         .environment(\.endEditing) { rootFocused = true }
-        // History floats on glass over the bottom of the list, which scrolls under it.
+        // History floats on glass over the bottom of the list, which scrolls under it, and
+        // word of a newer version floats in the corner above it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !showingFriends {
-                HistoryStrip(
-                    weeks: historyThumbs(),
-                    selectedWeekStart: viewedWeek,
-                    onSelect: { select(week: $0) }
-                )
-                .padding([.horizontal, .bottom], 12)
+            VStack(alignment: .trailing, spacing: 0) {
+                if let version = updates.available, let current = updates.current, !updates.dismissed {
+                    UpdateNotice(version: version, current: current) {
+                        withAnimation(motion(Motion.snappy)) { updates.dismissed = true }
+                    }
+                    .padding([.horizontal, .bottom], 12)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+                if !showingFriends {
+                    HistoryStrip(
+                        weeks: historyThumbs(),
+                        selectedWeekStart: viewedWeek,
+                        onSelect: { select(week: $0) }
+                    )
+                    .padding([.horizontal, .bottom], 12)
+                }
             }
+            .animation(motion(Motion.snappy), value: updates.available)
         }
         .frame(minWidth: 460, minHeight: 620)
         .navigationTitle(WeekMath.weekLabel(for: viewedWeek))

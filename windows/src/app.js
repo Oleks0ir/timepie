@@ -94,6 +94,19 @@ function App() {
       : null);
   }, [runningActivity?.name, runningActivity?.colorSlot, running?.startedAt]);
 
+  // Whether a newer TimePie is out, checked now and every few hours. Closing the notice
+  // hides it until next launch.
+  const [update, setUpdate] = useState(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  useEffect(() => {
+    const check = () => api.checkUpdate().then((u) => {
+      if (u && isNewer(u.latest, u.current)) setUpdate(u);
+    });
+    check();
+    const t = setInterval(check, 6 * 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
   // The leaderboard keeps itself current while it's on screen, often enough to catch a
   // friend starting a timer.
   useEffect(() => {
@@ -268,6 +281,9 @@ function App() {
         </button>
       </div>
 
+      ${update && !updateDismissed && html`
+        <${UpdateNotice} update=${update} onClose=${() => setUpdateDismissed(true)} />`}
+
       ${showingFriends ? html`<${FriendsView} week=${viewedWeek} />` : html`
       <div class="chart">
         <${Donut} slices=${slices} size=${250} hoveredID=${hoveredID} onHover=${setHoveredID} animate />
@@ -329,6 +345,33 @@ function App() {
       </div>
 
       <${HistoryStrip} weeks=${thumbs} selected=${viewedWeek.getTime()} onSelect=${select} />`}
+    </div>
+  `;
+}
+
+// MARK: - Updates
+
+/** "1.10.0" is newer than "1.9.2": compared number by number, not as text. */
+function isNewer(a, b) {
+  const x = a.split('.').map((n) => parseInt(n, 10) || 0), y = b.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+  }
+  return false;
+}
+
+/** A newer TimePie is out: a small card in the corner, with the way to it and a way to close it. */
+function UpdateNotice({ update, onClose }) {
+  return html`
+    <div class="update-notice" role="status">
+      <span class="update-icon">↓</span>
+      <div class="update-body">
+        <div class="update-title">TimePie ${update.latest} is out</div>
+        <div class="caption">You have ${update.current}. Download the new one and replace this copy.</div>
+        <button class="btn primary small" onClick=${() => api.openPage(update.page)}
+          title="The latest release, with downloads for Mac and Windows">Open GitHub</button>
+      </div>
+      <button class="update-close" onClick=${onClose} title="Close. It comes back next time you open TimePie.">✕</button>
     </div>
   `;
 }

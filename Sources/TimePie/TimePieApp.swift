@@ -4,12 +4,15 @@ import SwiftUI
 struct TimePieApp: App {
     @State private var store = Store()
     @State private var friends = Friends()
+    @State private var updates = Updates()
 
     var body: some Scene {
         WindowGroup("TimePie") {
             ContentView()
                 .environment(store)
                 .environment(friends)
+                .environment(updates)
+                .task { await updates.watch() }
                 .background(FullScreenBlocker())
         }
         .defaultSize(width: 520, height: 700)

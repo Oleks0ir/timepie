@@ -333,9 +333,9 @@ export class Friends {
       const response = await this.#request('GET', `/api/groups/${code}`);
       // Running timers count up from when they started on this computer's clock, so the
       // clocks never have to agree.
-      const now = Date.now();
+      const fetchedAt = Date.now();
       this.#membersByGroup.set(code, response.members.map((m) => (m.live
-        ? { ...m, live: { ...m.live, startedAt: now - m.live.seconds * 1000 } } : m)));
+        ? { ...m, live: { ...m.live, startedAt: fetchedAt - m.live.seconds * 1000 } } : m)));
       // A rename still on its way here wins over the name it's replacing.
       if (this.#namePending.has(code)) return;
       const now = this.groups.find((g) => g.code === code);
