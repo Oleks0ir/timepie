@@ -3,6 +3,7 @@
   "productName": "TimePie",
   "version": "1.8.0",
   "description": "TimePie — a weekly time donut",
+  "author": "Nikolai Kravchenko",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -10,9 +11,29 @@
     "build:win": "./build-windows.sh"
   },
   "devDependencies": {
-    "@electron/packager": "^20.3.0",
     "electron": "^44.6.0",
+    "electron-builder": "^26.15.3",
     "htm": "^3.1.1",
     "preact": "^11.0.0"
+  },
+  "build": {
+    "appId": "com.nikolaikravchenko.timepie",
+    "copyright": "Nikolai Kravchenko",
+    "files": ["main.js", "preload.js", "src/**/*", "build/icon.png"],
+    "electronLanguages": ["en-US"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "TimePie-Windows-Setup.${ext}"
+    }
   }
 }

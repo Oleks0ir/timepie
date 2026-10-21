@@ -1,5 +1,7 @@
 #!/bin/bash
-# Builds a Windows (x64) TimePie you can zip up and send — runs fine on a Mac.
+# Builds TimePie-Windows-Setup.exe (x64): an install wizard with a choice of folder,
+# Start menu and desktop shortcuts, and an uninstaller. Installing over an older version
+# removes it first; the data in %APPDATA%\TimePie is never touched.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -8,24 +10,11 @@ cd "$(dirname "$0")"
 echo "› icon…"
 node scripts/make-icon.js
 
-echo "› packaging for Windows x64…"
+# The app has no runtime dependencies (Preact is vendored into src/), and only ships
+# Chromium's English UI strings (electronLanguages in package.json).
+echo "› building the installer…"
 rm -rf dist
-npx @electron/packager . TimePie \
-  --platform=win32 --arch=x64 \
-  --out=dist --overwrite --asar \
-  --icon=build/icon.ico \
-  --app-copyright="Nikolai Kravchenko" \
-  --win32metadata.CompanyName="TimePie" \
-  --win32metadata.FileDescription="TimePie" \
-  --win32metadata.ProductName="TimePie" \
-  --ignore='^/(dist|scripts|node_modules)($|/)' --ignore='^/(build-windows\.sh|\.gitignore|package-lock\.json)$'
+npx electron-builder --win --x64 --publish never
 
-# The app has no runtime dependencies (Preact is vendored into src/), and only needs
-# Chromium's English UI strings — this trims the download considerably.
-find dist/TimePie-win32-x64/locales -type f ! -name 'en-US.pak' -delete
-
-echo "› zipping…"
-(cd dist && mv TimePie-win32-x64 TimePie && zip -qry TimePie-Windows.zip TimePie)
-
-echo "✓ dist/TimePie-Windows.zip ($(du -h dist/TimePie-Windows.zip | cut -f1))"
-echo "  send that zip; your friend unzips it and runs TimePie\\TimePie.exe"
+echo "✓ dist/TimePie-Windows-Setup.exe ($(du -h dist/TimePie-Windows-Setup.exe | cut -f1))"
+echo "  send that file; your friend runs it and follows the wizard"
