@@ -9,6 +9,8 @@ Grab the latest build from the [Releases page](../../releases/latest):
 - **Mac (Apple Silicon):** `TimePie-Mac.pkg`. Open it and follow the installer, which puts TimePie in Applications.
 - **Windows:** `TimePie-Windows-Setup.exe`. Run it and follow the wizard: pick a folder (your own user folder by default, no admin rights needed) and it adds Start menu and desktop shortcuts. Uninstall from **Settings → Apps**.
 
+Rather not install? `TimePie-Mac.zip` and `TimePie-Windows.zip` are there too, as before: unzip, then move `TimePie.app` to Applications or run `TimePie\TimePie.exe`.
+
 Installing a new version replaces the old one but keeps everything you've logged, and so does uninstalling. On Windows, if you used an older unzipped copy, delete its folder after installing.
 
 ### "Can't be opened" / "Windows protected your PC"
@@ -32,8 +34,8 @@ What's shared: the group's name, your display name and, for each of the last 12 
 
 ## Building
 
-Publishing a GitHub release builds both installers and attaches them to it (`.github/workflows/release.yml`). To build by hand:
+Publishing a GitHub release builds both installers and zips and attaches them to it (`.github/workflows/release.yml`). To build by hand:
 
-- Mac: `./build.sh` (needs the Swift toolchain), giving `TimePie.app` and the installer `TimePie-Mac.pkg`
-- Windows: `cd windows && ./build-windows.sh` (Git Bash on Windows), giving `windows/dist/TimePie-Windows-Setup.exe`
+- Mac: `./build.sh` (needs the Swift toolchain), giving `TimePie.app`, the installer `TimePie-Mac.pkg` and `TimePie-Mac.zip`
+- Windows: `cd windows && ./build-windows.sh` (Git Bash on Windows), giving `windows/dist/TimePie-Windows-Setup.exe` and `windows/dist/TimePie-Windows.zip`
 - Friends server (a Cloudflare Worker with a D1 database): `cd server && npx wrangler deploy`. The tables are in `server/schema.sql`.

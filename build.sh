@@ -53,6 +53,10 @@ PLIST
 # Ad-hoc signature — enough for the app to run on this machine.
 codesign --force --sign - "$APP" >/dev/null 2>&1 || echo "  (codesign skipped)"
 
+# The app on its own, for anyone who'd rather drag it to Applications themselves.
+rm -f TimePie-Mac.zip
+ditto -c -k --keepParent "$APP" TimePie-Mac.zip
+
 echo "› packaging ${PKG}…"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -117,5 +121,6 @@ productbuild --distribution "$WORK/distribution.xml" --resources "$WORK/resource
   --package-path "$WORK" "$PKG" >/dev/null
 
 echo "✓ $PKG"
-echo "  send that file; your friend opens it and follows the installer"
+echo "✓ TimePie-Mac.zip"
+echo "  send either; your friend opens the installer, or unzips and moves $APP to Applications"
 echo "  run without installing: open $APP"

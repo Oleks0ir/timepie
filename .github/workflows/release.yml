@@ -1,5 +1,5 @@
-# Builds TimePie-Mac.pkg and TimePie-Windows-Setup.exe and, for a published release,
-# attaches them to it. Pull requests and running it by hand (Actions → Run workflow)
+# Builds the installers (TimePie-Mac.pkg, TimePie-Windows-Setup.exe) and the zips
+# (TimePie-Mac.zip, TimePie-Windows.zip) and, for a published release, attaches them to it. Pull requests and running it by hand (Actions → Run workflow)
 # just build them, to download from the run's page.
 name: Installers
 
@@ -21,7 +21,9 @@ jobs:
       - uses: actions/upload-artifact@v5
         with:
           name: mac
-          path: TimePie-Mac.pkg
+          path: |
+            TimePie-Mac.pkg
+            TimePie-Mac.zip
 
   windows:
     runs-on: windows-latest
@@ -41,7 +43,9 @@ jobs:
       - uses: actions/upload-artifact@v5
         with:
           name: windows
-          path: windows/dist/TimePie-Windows-Setup.exe
+          path: |
+            windows/dist/TimePie-Windows-Setup.exe
+            windows/dist/TimePie-Windows.zip
 
   attach:
     if: github.event_name == 'release'
@@ -51,7 +55,7 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           merge-multiple: true
-      - run: gh release upload "$TAG" TimePie-Mac.pkg TimePie-Windows-Setup.exe --clobber --repo "$GITHUB_REPOSITORY"
+      - run: gh release upload "$TAG" TimePie-Mac.pkg TimePie-Mac.zip TimePie-Windows-Setup.exe TimePie-Windows.zip --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}

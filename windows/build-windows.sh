@@ -16,5 +16,17 @@ echo "› building the installer…"
 rm -rf dist
 npx electron-builder --win --x64 --publish never
 
+# The same app as a plain zip, for anyone who'd rather not install: unzip and run
+# TimePie\TimePie.exe. Windows has no zip command, so its built-in bsdtar makes it
+# there (PowerShell's zips use backslashes in their paths, which other unzippers mangle).
+echo "› zipping…"
+mv dist/win-unpacked dist/TimePie
+if command -v zip >/dev/null; then
+  (cd dist && zip -qry TimePie-Windows.zip TimePie)
+else
+  (cd dist && "$(cygpath -u "$SYSTEMROOT")/System32/tar.exe" -a -cf TimePie-Windows.zip TimePie)
+fi
+
 echo "✓ dist/TimePie-Windows-Setup.exe ($(du -h dist/TimePie-Windows-Setup.exe | cut -f1))"
-echo "  send that file; your friend runs it and follows the wizard"
+echo "✓ dist/TimePie-Windows.zip ($(du -h dist/TimePie-Windows.zip | cut -f1))"
+echo "  send either; your friend runs the setup, or unzips and runs TimePie\\TimePie.exe"
