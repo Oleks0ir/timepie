@@ -14,6 +14,9 @@ struct ContentView: View {
     /// The group's leaderboard in place of your own chart and rows.
     /// TIMEPIE_SHOW_FRIENDS opens on it, for a test run.
     @State private var showingFriends = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_FRIENDS"] != nil
+    /// The log of what's been added this week, dropped down from the toolbar.
+    /// TIMEPIE_SHOW_LOG opens on it, for a test run.
+    @State private var showingLog = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_LOG"] != nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The row being dragged by its handle, and how far it has travelled.
@@ -183,7 +186,7 @@ struct ContentView: View {
     // MARK: - Toolbar
 
     /// Week navigation lives in the window's toolbar, the way Calendar does it: arrows
-    /// on the left beside the week as the window title, and a way back to this week.
+    /// on the left beside the week as the window title. The log and the group sit on the right.
     @ToolbarContentBuilder
     private var weekToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
@@ -199,9 +202,13 @@ struct ContentView: View {
             }
         }
         ToolbarItem(placement: .primaryAction) {
-            Button("This Week") { select(week: Date()) }
-                .disabled(WeekMath.isSameWeek(viewedWeek, Date()))
-                .help("Go to the current week")
+            Toggle(isOn: $showingLog) {
+                Label("Log", systemImage: "list.bullet.clipboard")
+            }
+            .help("Everything logged this week")
+            .popover(isPresented: $showingLog, arrowEdge: .bottom) {
+                LogView(weekStart: viewedWeek)
+            }
         }
         ToolbarItem(placement: .primaryAction) {
             Toggle(isOn: $showingFriends) {

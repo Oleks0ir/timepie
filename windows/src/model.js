@@ -274,6 +274,14 @@ export class Store {
     this.#mutate(() => this.entries.push(this.#entry(activityID, day, delta, true)));
   }
 
+  /** Takes back one logged amount, from the log. */
+  deleteEntry(id) {
+    if (!this.entries.some((e) => e.id === id)) return;
+    this.#mutate(() => {
+      this.entries = this.entries.filter((e) => e.id !== id);
+    });
+  }
+
   addActivity(name, inWeek) {
     this.#mutate(() => {
       const taken = this.activitiesForWeek(inWeek).map((a) => a.colorSlot);

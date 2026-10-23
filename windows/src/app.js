@@ -53,6 +53,12 @@ const FolderPlusGlyph = () => html`<svg width="16" height="13" viewBox="0 0 16 1
 const PeopleGlyph = () => html`<svg width="18" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor"
   stroke-width="1.2" stroke-linecap="round"><circle cx="6.5" cy="4" r="2.6" /><path d="M1.5 12.5 Q1.5 8 6.5 8 Q11.5 8 11.5 12.5" />
   <circle cx="12.5" cy="4.2" r="2.1" /><path d="M12.5 7.8 Q16.5 7.8 16.5 12" /></svg>`;
+const LogGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+  stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="12" rx="2" />
+  <path d="M6 1.5 H10 V3.5 H6 Z" /><path d="M5.5 7 H10.5 M5.5 9.5 H10.5 M5.5 12 H8.5" /></svg>`;
+const TrashGlyph = () => html`<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor"
+  stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 3 H10.5 M4.5 3 V1.5 H7.5 V3" />
+  <path d="M2.5 3 L3.2 10.5 H8.8 L9.5 3" /></svg>`;
 const PlusCircle = () => html`<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2">
   <circle cx="7" cy="7" r="6" /><path d="M7 4 V10 M4 7 H10" stroke-linecap="round" /></svg>`;
 
@@ -66,6 +72,8 @@ function App() {
   const [hoveredID, setHoveredID] = useState(null);
   // The group's leaderboard in place of your own chart and rows.
   const [showingFriends, setShowingFriends] = useState(false);
+  // The log of what's been added this week, dropped down from the header.
+  const [showingLog, setShowingLog] = useState(false);
   // The row being dragged by its handle: { id, isFolder, from, offset, stride, slot, into }.
   // `slot` is where the gap is, as an index into the rows without the lifted one;
   // `into` is a folder the lifted task is held over, to drop it in.
@@ -275,10 +283,17 @@ function App() {
         <button class="chev" onClick=${() => select(W.addWeeks(1, viewedWeek))} title="Next week (→)">
           <${Chevron} dir="right" />
         </button>
-        <button class="friends-toggle ${showingFriends ? 'on' : ''}" onClick=${() => setShowingFriends((v) => !v)}
-          title=${showingFriends ? 'Back to your week' : 'Compare this week with friends'}>
-          <${PeopleGlyph} />
-        </button>
+        <div class="header-tools">
+          <button class="tool log-toggle ${showingLog ? 'on' : ''}" onClick=${() => setShowingLog((v) => !v)}
+            title="Everything logged this week">
+            <${LogGlyph} />
+          </button>
+          <button class="tool ${showingFriends ? 'on' : ''}" onClick=${() => setShowingFriends((v) => !v)}
+            title=${showingFriends ? 'Back to your week' : 'Compare this week with friends'}>
+            <${PeopleGlyph} />
+          </button>
+        </div>
+        ${showingLog && html`<${LogPanel} week=${viewedWeek} onClose=${() => setShowingLog(false)} />`}
       </div>
 
       ${update && !updateDismissed && html`
@@ -347,6 +362,87 @@ function App() {
       <${HistoryStrip} weeks=${thumbs} selected=${viewedWeek.getTime()} onSelect=${select} />`}
     </div>
   `;
+}
+
+// MARK: - Log
+
+/**
+ * Every amount logged into the viewed week, newest first, grouped by the day it was
+ * added — so you can check whether you already logged something, and take back what
+ * you logged twice. Ctrl+Z brings a deleted one back.
+ */
+function LogPanel({ week, onClose }) {
+  const store = useStore();
+  const ref = useRef();
+  useEffect(() => {
+    // The toggle closes it itself, so a click on it doesn't count as clicking away.
+    const away = (e) => !ref.current?.contains(e.target) && !e.target.closest('.log-toggle') && onClose();
+    const esc = (e) => e.key === 'Escape' && onClose();
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', away);
+      document.removeEventListener('keydown', esc);
+    };
+  }, []);
+
+  // Entries whose activity is gone count nowhere else, so they're left out here too.
+  const byID = new Map(store.activities.map((a) => [a.id, a]));
+  const lines = store.entriesIn(week, W.weekEnd(week))
+    .filter((e) => byID.has(e.activityID))
+    .map((e) => ({ entry: e, activity: byID.get(e.activityID), added: new Date(e.createdAt) }))
+    .sort((a, b) => b.added - a.added);
+
+  // Consecutive lines added on the same day, under that day.
+  const sections = [];
+  for (const line of lines) {
+    const day = W.startOfDay(line.added).getTime();
+    if (sections.at(-1)?.day === day) sections.at(-1).lines.push(line);
+    else sections.push({ day, lines: [line] });
+  }
+
+  return html`
+    <div class="log-panel" ref=${ref}>
+      <div class="log-title">Log</div>
+      ${sections.length === 0
+        ? html`<div class="log-empty">Nothing logged this week</div>`
+        : html`<div class="log-scroll">
+          ${sections.map((s) => html`
+            <div key=${s.day} class="log-day">${dayTitle(new Date(s.day))}</div>
+            ${s.lines.map(({ entry, activity, added }) => html`
+              <div key=${entry.id} class="log-row">
+                <span class="dot" style=${{ background: slotColor(activity.colorSlot) }} />
+                <div class="log-what">
+                  <span class="name">${activity.name}</span>
+                  <span class="caption">${logDetail(entry, added)}</span>
+                </div>
+                <span class="spacer" />
+                <span class="num log-amount ${entry.minutes < 0 ? 'negative' : ''}">
+                  ${(entry.minutes < 0 ? '−' : '+') + Duration.format(Math.abs(entry.minutes))}</span>
+                <button class="log-delete" onClick=${() => store.deleteEntry(entry.id)}
+                  title="Delete this entry (Ctrl+Z brings it back)"><${TrashGlyph} /></button>
+              </div>`)}`)}
+        </div>`}
+    </div>
+  `;
+}
+
+/** When it was added, and anything that sets it apart. */
+function logDetail(entry, added) {
+  const parts = [added.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })];
+  const day = W.DayStamp.parse(entry.day);
+  if (day.getTime() !== W.startOfDay(added).getTime()) {
+    parts.push(`for ${day.toLocaleDateString(undefined, { weekday: 'long' })}`);
+  }
+  if (entry.isAdjustment) parts.push('total edited');
+  return parts.join(' · ');
+}
+
+function dayTitle(day) {
+  const today = W.startOfDay(new Date());
+  if (day.getTime() === today.getTime()) return 'Today';
+  if (day.getTime() === W.addDays(-1, today).getTime()) return 'Yesterday';
+  return day.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
 }
 
 // MARK: - Updates

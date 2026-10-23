@@ -225,13 +225,39 @@ button { font: inherit; color: inherit; cursor: default; }
 /* Friends */
 
 .header { position: relative; }
-.friends-toggle {
-  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+.header-tools {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px;
+}
+.tool {
   width: 34px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted);
   display: grid; place-items: center;
 }
-.friends-toggle:hover { background: var(--hover); }
-.friends-toggle.on { background: var(--selected); color: var(--accent); }
+.tool:hover { background: var(--hover); }
+.tool.on { background: var(--selected); color: var(--accent); }
+
+/* Log */
+
+.log-panel {
+  position: absolute; top: calc(100% - 4px); right: 12px; z-index: 15; width: 320px;
+  background: var(--popover-bg); border: 1px solid var(--divider); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); display: flex; flex-direction: column;
+}
+.log-title { font-weight: 600; padding: 12px 14px 4px; }
+.log-empty { color: var(--muted); text-align: center; padding: 28px 0; }
+.log-scroll { max-height: 400px; overflow-y: auto; padding: 0 6px 8px; }
+.log-day { font-size: 11px; font-weight: 600; color: var(--muted); padding: 8px 8px 2px; }
+.log-row { display: flex; align-items: center; gap: 10px; padding: 4px 8px; border-radius: 6px; }
+.log-row:hover { background: var(--hover); }
+.log-row .dot { width: 9px; height: 9px; flex: none; }
+.log-what { display: flex; flex-direction: column; min-width: 0; }
+.log-amount { color: var(--secondary); }
+.log-amount.negative { color: var(--muted); }
+.log-delete {
+  border: 0; background: none; color: var(--muted); opacity: 0.6; width: 22px; height: 22px;
+  border-radius: 4px; display: grid; place-items: center; padding: 0;
+}
+.log-row:hover .log-delete { opacity: 1; }
+.log-delete:hover { background: var(--hover-strong); color: var(--secondary); }
 
 .friends { flex: 1 1 auto; overflow-y: auto; padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
 .card { background: var(--hover); border-radius: 12px; padding: 6px; }

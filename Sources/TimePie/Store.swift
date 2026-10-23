@@ -211,6 +211,12 @@ final class Store {
         }
     }
 
+    /// Takes back one logged amount, from the log.
+    func deleteEntry(_ id: UUID) {
+        guard entries.contains(where: { $0.id == id }) else { return }
+        mutate { entries.removeAll { $0.id == id } }
+    }
+
     func addActivity(named name: String, inWeek weekStart: Date) {
         mutate {
             // Only colours on screen in this week are off the table, so older, unrelated
