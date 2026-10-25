@@ -77,6 +77,10 @@ struct DonutChart: View {
             .opacity(hoveredID == nil || lifted ? 1 : 0.4)
         }
         .chartLegend(.hidden)
+        // Swift Charts traps when a sector animation is interrupted by a different set
+        // of sectors (delete a row, then flip the week mid-animation). A new set of
+        // slices gets a fresh chart instead; resizing the existing ones still animates.
+        .id(shown.map(\.id))
         .animation(Motion.chart, value: slices)
         .animation(Motion.snappy, value: hoveredID)
     }

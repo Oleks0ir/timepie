@@ -24,9 +24,9 @@ struct ContentView: View {
     /// One row's height plus the gap below it: how far a row moves per place.
     @State private var rowStride: CGFloat = 30
 
-    /// A running timer, deliberately *not* persisted: it dies with the app. Nothing is
-    /// written until you stop it, so a crash loses the session rather than inventing one.
-    @State private var running: RunningTimer?
+    /// A running timer. Nothing is logged until you stop it, but the timer itself is
+    /// remembered, so quitting or a crash picks it back up still running.
+    @State private var running: RunningTimer? = RunningTimer.restore()
     /// Drives the once-a-second redraw while a timer runs.
     @State private var now = Date()
     /// Holds keyboard focus for the ← / → week shortcuts.
@@ -34,12 +34,27 @@ struct ContentView: View {
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    private struct RunningTimer {
+    private struct RunningTimer: Codable, Equatable {
         let activityID: UUID
         let startedAt: Date
         /// The day the timer *started* — a session running past midnight stays put
         /// rather than jumping into the next day, or the next week.
         let day: Date
+
+        private static let key = "runningTimer"
+
+        static func restore() -> RunningTimer? {
+            guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+            return try? JSONDecoder().decode(RunningTimer.self, from: data)
+        }
+
+        static func persist(_ timer: RunningTimer?) {
+            if let timer, let data = try? JSONEncoder().encode(timer) {
+                UserDefaults.standard.set(data, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
     }
 
     private struct RowDrag {
@@ -161,6 +176,13 @@ struct ContentView: View {
                 await friends.refresh()
                 // Often enough to catch a friend starting a timer.
                 try? await Task.sleep(for: .seconds(30))
+            }
+        }
+        .onChange(of: running) { RunningTimer.persist(running) }
+        // A remembered timer whose activity has since gone is dropped, not resumed.
+        .onAppear {
+            if let id = running?.activityID, !store.activities.contains(where: { $0.id == id }) {
+                running = nil
             }
         }
         .onReceive(tick) { instant in
