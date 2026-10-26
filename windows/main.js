@@ -21,9 +21,9 @@ let win;
 function createWindow() {
   win = new BrowserWindow({
     title: 'TimePie',
-    width: 520,
+    width: 580,
     height: 700,
-    minWidth: 460,
+    minWidth: 560,
     minHeight: 620,
     useContentSize: true,
     show: false,

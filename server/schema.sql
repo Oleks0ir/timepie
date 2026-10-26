@@ -27,3 +27,21 @@ CREATE TABLE IF NOT EXISTS members (
   live_seen TEXT,
   PRIMARY KEY (group_code, id)
 );
+
+-- The global leaderboard: everyone who chose to join it, with nothing but a name and
+-- each week's total. No activities, no entries, no timers.
+CREATE TABLE IF NOT EXISTS global_members (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL,
+  name TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- One row per person per week they logged time in. `week` is their own Monday.
+CREATE TABLE IF NOT EXISTS global_weeks (
+  member_id TEXT NOT NULL REFERENCES global_members(id),
+  week TEXT NOT NULL,
+  total INTEGER NOT NULL,
+  PRIMARY KEY (member_id, week)
+);
+CREATE INDEX IF NOT EXISTS global_weeks_ranked ON global_weeks (week, total DESC);

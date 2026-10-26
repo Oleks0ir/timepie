@@ -55,6 +55,9 @@ const PeopleGlyph = () => html`<svg width="18" height="14" viewBox="0 0 18 14" f
   <circle cx="12.5" cy="4.2" r="2.1" /><path d="M12.5 7.8 Q16.5 7.8 16.5 12" /></svg>`;
 const CalendarGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
   stroke-width="1.3"><rect x="2" y="3" width="12" height="11" rx="2" /><path d="M2 6.5h12M5 1.5v3M11 1.5v3" /></svg>`;
+const TrophyGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+  stroke-width="1.3" stroke-linejoin="round"><path d="M4.5 2h7v4a3.5 3.5 0 0 1-7 0V2Z" />
+  <path d="M4.5 3.5H2.5v1a2.5 2.5 0 0 0 2.2 2.5M11.5 3.5h2v1a2.5 2.5 0 0 1-2.2 2.5M8 9.5V12M5.5 14h5M6 12h4" /></svg>`;
 const LogGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
   stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="12" rx="2" />
   <path d="M6 1.5 H10 V3.5 H6 Z" /><path d="M5.5 7 H10.5 M5.5 9.5 H10.5 M5.5 12 H8.5" /></svg>`;
@@ -79,6 +82,8 @@ function App() {
   // Your time over any day, month or interval in place of the week.
   const [showingStats, setShowingStats] = useState(false);
   const [stats, setStats] = useState(() => W.Stats.initial());
+  // The board everyone can join, for the week on screen.
+  const [showingGlobal, setShowingGlobal] = useState(false);
   // The row being dragged by its handle: { id, isFolder, from, offset, stride, slot, into }.
   // `slot` is where the gap is, as an index into the rows without the lifted one;
   // `into` is a folder the lifted task is held over, to drop it in.
@@ -143,14 +148,21 @@ function App() {
     else select(W.addWeeks(n, weekRef.current));
   };
 
-  // The two pages that take the week's place take turns.
+  // The pages that take the week's place take turns.
   const toggleStats = () => {
     setShowingStats((v) => !v);
     setShowingFriends(false);
+    setShowingGlobal(false);
   };
   const toggleFriends = () => {
     setShowingFriends((v) => !v);
     setShowingStats(false);
+    setShowingGlobal(false);
+  };
+  const toggleGlobal = () => {
+    setShowingGlobal((v) => !v);
+    setShowingStats(false);
+    setShowingFriends(false);
   };
 
   // ← and → step through weeks, unless a text field is taking the arrow keys.
@@ -325,6 +337,10 @@ function App() {
             title=${showingFriends ? 'Back to your week' : 'Compare this week with friends'}>
             <${PeopleGlyph} />
           </button>
+          <button class="tool ${showingGlobal ? 'on' : ''}" onClick=${toggleGlobal}
+            title=${showingGlobal ? 'Back to your week' : 'This week\u2019s totals for everyone using TimePie'}>
+            <${TrophyGlyph} />
+          </button>
         </div>
         ${showingLog && html`<${LogPanel} week=${viewedWeek} onClose=${() => setShowingLog(false)} />`}
       </div>
@@ -333,6 +349,7 @@ function App() {
         <${UpdateNotice} update=${update} onClose=${() => setUpdateDismissed(true)} />`}
 
       ${showingStats ? html`<${StatsView} selection=${stats} onChange=${setStats} />`
+        : showingGlobal ? html`<${GlobalView} week=${viewedWeek} />`
         : showingFriends ? html`<${FriendsView} week=${viewedWeek} />` : html`
       <div class="chart">
         <${Donut} slices=${slices} size=${250} hoveredID=${hoveredID} onHover=${setHoveredID} animate />
@@ -1043,6 +1060,126 @@ function FriendsView({ week }) {
         : html`<${JoinGroupCard} onDone=${() => setAdding(false)}
             onCancel=${friends.groups.length ? () => setAdding(false) : null} />`}
       ${friends.problem && html`<div class="friends-problem">⚠︎ ${friends.problem}</div>`}
+    </div>
+  `;
+}
+
+// MARK: - The global board
+
+/**
+ * The board everyone using TimePie can join: one week's totals, highest first. It follows
+ * the week on screen, like the friends page. Joining asks for a name and spells out what
+ * leaves the computer.
+ */
+function GlobalView({ week }) {
+  const friends = useFriends();
+  const me = friends.global;
+  const weekKey = week.getTime();
+
+  // Kept current while it's on screen, and fetched afresh for each week.
+  useEffect(() => {
+    if (!me) return;
+    friends.refreshGlobal(week);
+    const t = setInterval(() => friends.refreshGlobal(week), 60000);
+    return () => clearInterval(t);
+  }, [weekKey, !!me]);
+
+  return html`
+    <div class="friends">
+      ${me
+        ? html`<${GlobalBoard} board=${friends.globalBoard(week)} me=${me} />
+          <${GlobalYouCard} me=${me} />`
+        : html`<${JoinGlobalCard} />`}
+      ${friends.problem && html`<div class="friends-problem">⚠︎ ${friends.problem}</div>`}
+    </div>
+  `;
+}
+
+function GlobalBoard({ board, me }) {
+  const line = (place, name, total, isMe) => html`
+    <div class="standing global-line ${isMe ? 'mine' : ''}">
+      <div class="standing-summary">
+        <span class="place num ${place === 1 ? 'first' : ''}">${place}</span>
+        <span class="name ${isMe ? 'me' : ''}">${name}</span>
+        ${isMe && html`<span class="you">You</span>`}
+        <span class="spacer" />
+        <span class="standing-total num">${Duration.format(total)}</span>
+      </div>
+    </div>`;
+  if (!board) return html`<div class="card board"><div class="board-note">Loading…</div></div>`;
+  const onTop = board.top.some((r) => r.id === me.memberID);
+  return html`
+    <div class="card board">
+      ${board.top.map((r) => html`<div key=${r.id}>${line(r.place, r.name, r.total, r.id === me.memberID)}</div>`)}
+      ${board.top.length === 0 && html`<div class="board-note">Nobody has logged time this week yet.</div>`}
+      ${board.me && !onTop && html`
+        <div class="global-gap">…</div>
+        ${line(board.me.place, me.name, board.me.total, true)}`}
+    </div>
+    ${board.count > 0 && html`<div class="caption global-count">
+      ${board.count === 1 ? '1 person' : `${board.count} people`} logged time this week</div>`}
+  `;
+}
+
+/** The name you go by on the board, what it shows of you, and the way off it. */
+function GlobalYouCard({ me }) {
+  const friends = useFriends();
+  const [name, setName] = useState(me.name);
+  const [confirming, setConfirming] = useState(false);
+  // Leaving the page keeps what you typed, as Enter would.
+  const nameRef = useRef(name);
+  nameRef.current = name;
+  useEffect(() => () => friends.renameGlobal(nameRef.current), []);
+
+  return html`
+    <div class="card group-card">
+      <label class="setting narrow">
+        <span>Your name</span>
+        <input class="field" value=${name} onInput=${(e) => setName(e.currentTarget.value)}
+          onKeyDown=${(e) => e.key === 'Enter' && friends.renameGlobal(name)}
+          onBlur=${() => friends.renameGlobal(name)} />
+      </label>
+      <div class="group-foot">
+        <span class="caption">Shared with everyone: this name and your total time for each of the last 12 weeks.</span>
+        <span class="spacer" />
+        ${confirming
+          ? html`<button class="btn" onClick=${() => setConfirming(false)}>Cancel</button>
+            <button class="btn danger" onClick=${() => friends.leaveGlobal()}
+              title="Your name and weekly totals are deleted from the server">Leave Leaderboard</button>`
+          : html`<button class="btn danger" onClick=${() => setConfirming(true)}>Leave</button>`}
+      </div>
+    </div>
+  `;
+}
+
+/** What joining means, before anything is sent. */
+function JoinGlobalCard() {
+  const friends = useFriends();
+  // The name you go by in your groups, if you're in any.
+  const [name, setName] = useState(() => friends.groups.at(-1)?.name ?? '');
+  const hasName = name.trim().length > 0;
+  const join = () => hasName && !friends.working && friends.joinGlobal(name);
+
+  return html`
+    <div class="card join-card">
+      <div class="join-icon"><${TrophyGlyph} /></div>
+      <div class="join-title">Leaderboard</div>
+      <div class="join-text">See how your week compares with everyone using TimePie.</div>
+      <div class="global-notice">
+        <div class="global-notice-title">If you join, anyone using TimePie can see:</div>
+        <div>• The name you enter below</div>
+        <div>• Your total time for each of the last 12 weeks, kept up to date as you log</div>
+        <div class="global-notice-never">Never what you worked on, how your time splits up, your entries
+          or a running timer. Leaving deletes it all from the server.</div>
+      </div>
+      <label class="setting narrow">
+        <span>Your name</span>
+        <input class="field" placeholder="Shown to everyone" value=${name}
+          onInput=${(e) => setName(e.currentTarget.value)}
+          onKeyDown=${(e) => e.key === 'Enter' && join()} />
+      </label>
+      <button class="btn primary" disabled=${!hasName || friends.working} onClick=${join}>Join the Leaderboard</button>
+      ${friends.working && html`<div class="caption">Working…</div>`}
     </div>
   `;
 }

@@ -1,9 +1,10 @@
-// Port of Friends.swift. Comparing weeks with groups of friends.
+// Port of Friends.swift. Comparing weeks with groups of friends, and with everyone on
+// the global board.
 //
 // Nothing leaves the computer until you start or join a group. From then on, every
 // change pushes a summary of your last twelve weeks to each group you're in — a total
 // and the slices, with the activity names left out if you'd rather — and never the
-// entries themselves.
+// entries themselves. The global board, once joined, gets only the weekly totals.
 
 import * as W from './model.js';
 
@@ -14,6 +15,8 @@ const WEEKS_SHARED = 12;
  * hasn't heard from in a while, so a timer that dies with its app doesn't linger.
  */
 const LIVE_HEARTBEAT = 60000;
+/** Stands in for a group code among the pushes owed. Codes are upper case, so it can't clash. */
+const GLOBAL = 'global';
 
 /** "ABCDEF" reads as "ABC-DEF". */
 export const displayCode = (code) => (code.length === 6 ? `${code.slice(0, 3)}-${code.slice(3)}` : code);
@@ -55,6 +58,12 @@ export class Friends {
   #liveTimer = null;
   /** The last timer update sent, so one in flight can't land after a stop. */
   #liveSending = Promise.resolve();
+  /** You on the global board as { memberID, token, name }, once you've joined it. */
+  global = null;
+  /** Weeks of the global board as the server last sent them, by their Monday. */
+  #globalBoards = new Map();
+  /** The week the board is open on, fetched again after each push. */
+  #globalWeek = null;
 
   constructor(json, persist) {
     this.#persist = persist;
@@ -64,6 +73,7 @@ export class Friends {
       if (Array.isArray(saved?.groups)) {
         this.groups = saved.groups;
         this.selectedCode = saved.selected ?? null;
+        this.global = saved.global ?? null;
       } else if (saved?.code) {
         this.groups = [saved];
       }
@@ -214,7 +224,7 @@ export class Friends {
     if (!force && JSON.stringify(summaries) === JSON.stringify(this.mine)) return;
     this.mine = summaries;
     this.#changed();
-    this.#schedulePush(this.groups.map((g) => g.code), delay);
+    this.#schedulePush([...this.groups.map((g) => g.code), ...(this.global ? [GLOBAL] : [])], delay);
   }
 
   #schedulePush(codes, delay) {
@@ -289,6 +299,7 @@ export class Friends {
   }
 
   async #push(code) {
+    if (code === GLOBAL) return this.#pushGlobal();
     const g = this.groups.find((g) => g.code === code);
     if (!g) {
       this.#pushPending.delete(code);
@@ -382,11 +393,80 @@ export class Friends {
     return rows;
   }
 
+  // MARK: The global board
+
+  /**
+   * One week of the board everyone can join, as { count, top: [{ id, name, total, place }],
+   * me: { total, place } | null }. It holds names and weekly totals, nothing more.
+   */
+  globalBoard(weekDate) {
+    return this.#globalBoards.get(W.DayStamp.string(W.weekStart(weekDate))) ?? null;
+  }
+
+  /** Resolves true once you're on the board. */
+  joinGlobal(name) {
+    return this.#run(async () => {
+      this.global = { memberID: crypto.randomUUID().toUpperCase(), token: makeToken(), name: name.trim() };
+      this.#save();
+      await this.#pushGlobal();
+    });
+  }
+
+  /** Takes your weeks off the board. Even if the server can't be reached, this app stops sending. */
+  async leaveGlobal() {
+    const g = this.global;
+    if (!g) return;
+    await this.#request('DELETE', `/api/global/members/${g.memberID}`, null, g.token).catch(() => {});
+    this.global = null;
+    this.#globalBoards.clear();
+    this.#pushPending.delete(GLOBAL);
+    this.problem = null;
+    this.#save();
+  }
+
+  renameGlobal(name) {
+    const trimmed = name.trim();
+    if (!this.global || !trimmed || trimmed === this.global.name) return;
+    this.global = { ...this.global, name: trimmed };
+    this.#save();
+    this.#schedulePush([GLOBAL], 0);
+  }
+
+  /** Fetches one week of the board, sending anything still owed first. */
+  refreshGlobal(weekDate) {
+    const key = W.DayStamp.string(W.weekStart(weekDate));
+    this.#globalWeek = key;
+    return this.#run(async () => {
+      if (this.#pushPending.has(GLOBAL)) await this.#pushGlobal();
+      await this.#fetchGlobal(key);
+    });
+  }
+
+  async #pushGlobal() {
+    const g = this.global;
+    if (!g) {
+      this.#pushPending.delete(GLOBAL);
+      return;
+    }
+    this.#pushPending.add(GLOBAL);
+    const weeks = this.mine.map((w) => ({ week: w.week, total: w.total }));
+    await this.#request('PUT', `/api/global/members/${g.memberID}`, { name: g.name, weeks }, g.token);
+    this.#pushPending.delete(GLOBAL);
+    // So your new total shows in your place straight away.
+    if (this.#globalWeek) await this.#fetchGlobal(this.#globalWeek);
+  }
+
+  async #fetchGlobal(key) {
+    const me = this.global ? `?me=${this.global.memberID}` : '';
+    this.#globalBoards.set(key, await this.#request('GET', `/api/global/${key}${me}`));
+    this.#changed();
+  }
+
   // MARK: Plumbing
 
   #save() {
-    this.#persist(this.groups.length
-      ? JSON.stringify({ groups: this.groups, selected: this.selectedCode }, null, 2)
+    this.#persist(this.groups.length || this.global
+      ? JSON.stringify({ groups: this.groups, selected: this.selectedCode, global: this.global ?? undefined }, null, 2)
       : null);
     this.#changed();
   }

@@ -399,3 +399,15 @@ button { font: inherit; color: inherit; cursor: default; }
 .stats-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats-row .percent { color: var(--muted); }
 .stats-row .amount { min-width: 64px; text-align: right; }
+
+/* The global board */
+
+.global-line.mine { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.global-gap { text-align: center; color: var(--muted); padding: 0 0 2px; }
+.global-count { text-align: center; margin-top: -6px; }
+.global-notice {
+  max-width: 380px; text-align: left; display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px; border-radius: 10px; background: var(--hover); color: var(--primary);
+}
+.global-notice-title { font-weight: 600; }
+.global-notice-never { color: var(--secondary); margin-top: 2px; }

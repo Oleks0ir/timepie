@@ -1,12 +1,12 @@
 import Foundation
 import Observation
 
-/// Comparing weeks with groups of friends.
+/// Comparing weeks with groups of friends, and with everyone on the global board.
 ///
 /// Nothing leaves the computer until you start or join a group. From then on, every
 /// change pushes a summary of your last twelve weeks to each group you're in — a total
 /// and the slices, with the activity names left out if you'd rather — and never the
-/// entries themselves. The server replaces your summary whole on each push, so it
+/// entries themselves. The global board, once joined, gets only the weekly totals. The server replaces your summary whole on each push, so it
 /// can't drift from here.
 ///
 /// Which groups you're in, and for each the id and secret token that let only this app
@@ -38,6 +38,7 @@ final class Friends {
     private struct SavedFile: Codable {
         var groups: [Membership]
         var selected: String?
+        var global: GlobalMembership?
     }
 
     struct SliceSummary: Codable, Equatable {
@@ -108,6 +109,15 @@ final class Friends {
     private var namePending: Set<String> = []
     private var liveTask: Task<Void, Never>?
 
+    /// You on the global board, once you've joined it.
+    private(set) var global: GlobalMembership?
+    /// Weeks of the global board as the server last sent them, by their Monday.
+    private var globalBoards: [String: GlobalBoard] = [:]
+    /// The week the board is open on, fetched again after each push.
+    private var globalWeek: String?
+    /// Stands in for a group code in `pushPending`. Codes are upper case, so it can't clash.
+    private static let globalKey = "global"
+
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? Store.defaultFileURL()
             .deletingLastPathComponent()
@@ -116,6 +126,7 @@ final class Friends {
             if let saved = try? JSONDecoder().decode(SavedFile.self, from: data) {
                 groups = saved.groups
                 selectedCode = saved.selected
+                global = saved.global
             } else if let one = try? JSONDecoder().decode(Membership.self, from: data) {
                 groups = [one]
             }
@@ -253,7 +264,7 @@ final class Friends {
         // Reordering or folding a folder changes nothing anyone else can see.
         guard force || summaries != mine else { return }
         mine = summaries
-        schedulePush(to: groups.map(\.code), after: delay)
+        schedulePush(to: groups.map(\.code) + (global == nil ? [] : [Friends.globalKey]), after: delay)
     }
 
     private func schedulePush(to codes: [String], after delay: Double) {
@@ -330,6 +341,7 @@ final class Friends {
     }
 
     private func push(_ code: String) async throws {
+        if code == Friends.globalKey { return try await pushGlobal() }
         guard let group = groups.first(where: { $0.code == code }) else {
             pushPending.remove(code)
             return
@@ -449,6 +461,115 @@ final class Friends {
         }
     }
 
+    // MARK: - The global board
+
+    /// You on the board everyone can join. It holds your name and each week's total, and
+    /// nothing else: no activities, no entries, no timer.
+    struct GlobalMembership: Codable, Equatable {
+        var memberID: UUID
+        var token: String
+        var name: String
+    }
+
+    /// One week of the global board.
+    struct GlobalBoard: Decodable, Equatable {
+        struct Row: Decodable, Equatable, Identifiable {
+            var id: String
+            var name: String
+            var total: Int
+            /// Equal totals share a place.
+            var place: Int
+        }
+
+        struct Place: Decodable, Equatable {
+            var total: Int
+            var place: Int
+        }
+
+        /// How many people logged time that week.
+        var count: Int
+        /// The first hundred or so, highest first.
+        var top: [Row]
+        /// Where you stand, even below the top. Nil with nothing logged.
+        var me: Place?
+    }
+
+    func globalBoard(week: Date) -> GlobalBoard? {
+        globalBoards[DayStamp.string(from: WeekMath.weekStart(for: week))]
+    }
+
+    /// True once you're on the board.
+    @discardableResult
+    func joinGlobal(name: String) async -> Bool {
+        await run {
+            self.global = GlobalMembership(memberID: UUID(), token: Friends.makeToken(),
+                                           name: name.trimmingCharacters(in: .whitespaces))
+            self.save()
+            try await self.pushGlobal()
+        }
+    }
+
+    /// Takes your weeks off the board. Even if the server can't be reached, this app stops sending.
+    func leaveGlobal() async {
+        guard let global else { return }
+        _ = try? await request("DELETE", "api/global/members/\(global.memberID.uuidString)",
+                               token: global.token) as Ignored
+        self.global = nil
+        globalBoards = [:]
+        pushPending.remove(Friends.globalKey)
+        save()
+        problem = nil
+    }
+
+    func renameGlobal(to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard var changed = global, !trimmed.isEmpty, trimmed != changed.name else { return }
+        changed.name = trimmed
+        global = changed
+        save()
+        schedulePush(to: [Friends.globalKey], after: 0)
+    }
+
+    /// Fetches one week of the board, sending anything still owed first.
+    func refreshGlobal(week: Date) async {
+        let key = DayStamp.string(from: WeekMath.weekStart(for: week))
+        globalWeek = key
+        await run {
+            if self.pushPending.contains(Friends.globalKey) { try await self.pushGlobal() }
+            try await self.fetchGlobal(key)
+        }
+    }
+
+    private func pushGlobal() async throws {
+        guard let global else {
+            pushPending.remove(Friends.globalKey)
+            return
+        }
+        pushPending.insert(Friends.globalKey)
+        let weeks = mine.map { GlobalWeek(week: $0.week, total: $0.total) }
+        let _: Ignored = try await request(
+            "PUT", "api/global/members/\(global.memberID.uuidString)",
+            body: GlobalPushBody(name: global.name, weeks: weeks), token: global.token)
+        pushPending.remove(Friends.globalKey)
+        // So your new total shows in your place straight away.
+        if let globalWeek { try await fetchGlobal(globalWeek) }
+    }
+
+    private func fetchGlobal(_ key: String) async throws {
+        let me = global.map { [URLQueryItem(name: "me", value: $0.memberID.uuidString)] } ?? []
+        globalBoards[key] = try await request("GET", "api/global/\(key)", query: me)
+    }
+
+    private struct GlobalWeek: Encodable {
+        var week: String
+        var total: Int
+    }
+
+    private struct GlobalPushBody: Encodable {
+        var name: String
+        var weeks: [GlobalWeek]
+    }
+
     // MARK: - Summaries
 
     static func summaries(of store: Store) -> [WeekSummary] {
@@ -479,9 +600,10 @@ final class Friends {
     // MARK: - Plumbing
 
     private func save() {
-        if groups.isEmpty {
+        if groups.isEmpty && global == nil {
             try? FileManager.default.removeItem(at: fileURL)
-        } else if let data = try? JSONEncoder().encode(SavedFile(groups: groups, selected: selectedCode)) {
+        } else if let data = try? JSONEncoder().encode(SavedFile(groups: groups, selected: selectedCode,
+                                                                    global: global)) {
             try? data.write(to: fileURL, options: .atomic)
         }
     }
@@ -512,8 +634,11 @@ final class Friends {
 
     private func request<T: Decodable>(_ method: String, _ path: String,
                                        body: (any Encodable)? = nil,
-                                       token: String? = nil) async throws -> T {
-        var req = URLRequest(url: Friends.server.appendingPathComponent(path))
+                                       token: String? = nil,
+                                       query: [URLQueryItem] = []) async throws -> T {
+        var url = Friends.server.appendingPathComponent(path)
+        if !query.isEmpty { url.append(queryItems: query) }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 15
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }

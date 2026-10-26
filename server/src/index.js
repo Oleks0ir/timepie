@@ -11,6 +11,12 @@
 //   PUT    /api/groups/:code/members/:id/live (Bearer token) ← { live: { name, colorSlot, seconds } | null }
 //   DELETE /api/groups/:code/members/:id     (Bearer token)
 //   GET    /g/:code                          → the leaderboard as a web page
+//
+// And one board everyone can join, holding only a name and each week's total:
+//
+//   GET    /api/global/:week?me=:id          → { week, count, top: [{ id, name, total, place }], me }
+//   PUT    /api/global/members/:id           (Bearer token) ← { name, weeks: [{ week, total }] }
+//   DELETE /api/global/members/:id           (Bearer token)
 
 // Wrangler bundles .html files as plain text.
 import page from './page.html';
@@ -24,6 +30,8 @@ const MAX_SLICES = 60;
 const MAX_NAME = 40;
 const MAX_GROUP_NAME = 40;
 const MAX_SLICE_NAME = 60;
+/** How many places the global board lists. */
+const GLOBAL_TOP = 100;
 /** A running timer is re-sent every minute; one not heard from in this long has died with its app. */
 const LIVE_TIMEOUT_MS = 150 * 1000;
 
@@ -61,6 +69,7 @@ async function route(request, env, path) {
   if (path[0] === 'g' && path.length === 2 && method === 'GET') {
     return new Response(page, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
+  if (path[0] === 'api' && path[1] === 'global') return routeGlobal(request, env, path);
   if (path[0] !== 'api' || path[1] !== 'groups') return fail(404, 'Not found.');
 
   if (path.length === 2 && method === 'POST') return createGroup(request, env);
@@ -82,6 +91,90 @@ async function route(request, env, path) {
     return putLive(request, env, code, id.toUpperCase());
   }
   return fail(404, 'Not found.');
+}
+
+// MARK: - The global board
+
+async function routeGlobal(request, env, path) {
+  const method = request.method;
+  if (path.length === 3 && method === 'GET') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(path[2])) return fail(400, 'Bad week.');
+    return getGlobal(env, path[2], new URL(request.url).searchParams.get('me')?.toUpperCase());
+  }
+  if (path.length === 4 && path[2] === 'members') {
+    const id = path[3];
+    if (!/^[0-9A-Fa-f-]{36}$/.test(id)) return fail(400, 'Bad member id.');
+    if (method === 'PUT') return putGlobalMember(request, env, id.toUpperCase());
+    if (method === 'DELETE') return deleteGlobalMember(request, env, id.toUpperCase());
+  }
+  return fail(404, 'Not found.');
+}
+
+/** One week's board: the top of it, how many are on it, and where `me` stands. */
+async function getGlobal(env, week, me) {
+  const [top, count, mine] = await env.DB.batch([
+    env.DB.prepare(`SELECT m.id, m.name, w.total FROM global_weeks w JOIN global_members m ON m.id = w.member_id
+                    WHERE w.week = ? AND w.total > 0 ORDER BY w.total DESC, m.name COLLATE NOCASE LIMIT ?`)
+      .bind(week, GLOBAL_TOP),
+    env.DB.prepare('SELECT COUNT(*) AS count FROM global_weeks WHERE week = ? AND total > 0').bind(week),
+    env.DB.prepare(`SELECT w.total, (SELECT COUNT(*) FROM global_weeks o WHERE o.week = w.week AND o.total > w.total) AS ahead
+                    FROM global_weeks w WHERE w.week = ? AND w.member_id = ? AND w.total > 0`)
+      .bind(week, me ?? ''),
+  ]);
+  // Equal totals share a place.
+  let place = 0;
+  const rows = top.results.map((r, i) => {
+    if (i === 0 || r.total !== top.results[i - 1].total) place = i + 1;
+    return { id: r.id, name: r.name, total: r.total, place };
+  });
+  const m = mine.results[0];
+  return json({
+    week,
+    count: count.results[0].count,
+    top: rows,
+    me: m ? { total: m.total, place: m.ahead + 1 } : null,
+  });
+}
+
+async function putGlobalMember(request, env, id) {
+  const tokenHash = await hashToken(request);
+  if (!tokenHash) return fail(401, 'Missing token.');
+
+  const body = await request.json().catch(() => null);
+  const name = cleanName(body?.name, MAX_NAME);
+  if (!name) throw new BadRequest('A name is needed.');
+  if (!Array.isArray(body?.weeks) || body.weeks.length > MAX_WEEKS) throw new BadRequest('Bad weeks.');
+  const weeks = body.weeks.map((w) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(w?.week ?? '') || !isMinutes(w.total)) throw new BadRequest('Bad week.');
+    return { week: w.week, total: w.total };
+  });
+
+  const existing = await env.DB.prepare('SELECT token_hash FROM global_members WHERE id = ?').bind(id).first();
+  if (existing && existing.token_hash !== tokenHash) return fail(403, 'That member belongs to someone else.');
+
+  // The weeks are replaced whole, like a group's, so the board mirrors the app.
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO global_members (id, token_hash, name, updated_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT (id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`)
+      .bind(id, tokenHash, name, new Date().toISOString()),
+    env.DB.prepare('DELETE FROM global_weeks WHERE member_id = ?').bind(id),
+    ...weeks.map((w) => env.DB.prepare('INSERT INTO global_weeks (member_id, week, total) VALUES (?, ?, ?)')
+      .bind(id, w.week, w.total)),
+  ]);
+  return json({ ok: true });
+}
+
+async function deleteGlobalMember(request, env, id) {
+  const tokenHash = await hashToken(request);
+  if (!tokenHash) return fail(401, 'Missing token.');
+  const member = await env.DB.prepare('SELECT token_hash FROM global_members WHERE id = ?').bind(id).first();
+  if (member && member.token_hash === tokenHash) {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM global_weeks WHERE member_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM global_members WHERE id = ?').bind(id),
+    ]);
+  }
+  return json({ ok: true });
 }
 
 /** "abc-def", "ABC DEF" and "abcdef" all name the same group. */

@@ -21,6 +21,9 @@ struct ContentView: View {
     /// TIMEPIE_SHOW_STATS opens on it, for a test run.
     @State private var showingStats = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_STATS"] != nil
     @State private var stats = StatsSelection()
+    /// The board everyone can join, for the week on screen.
+    /// TIMEPIE_SHOW_GLOBAL opens on it, for a test run.
+    @State private var showingGlobal = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_GLOBAL"] != nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The row being dragged by its handle, and how far it has travelled.
@@ -126,6 +129,8 @@ struct ContentView: View {
             VStack(spacing: 22) {
                 if showingStats {
                     StatsView(selection: $stats)
+                } else if showingGlobal {
+                    GlobalView(week: viewedWeek)
                 } else if showingFriends {
                     FriendsView(week: viewedWeek)
                 } else {
@@ -153,7 +158,7 @@ struct ContentView: View {
                     .padding([.horizontal, .bottom], 12)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
-                if !showingFriends && !showingStats {
+                if !showingFriends && !showingStats && !showingGlobal {
                     HistoryStrip(
                         weeks: historyThumbs(),
                         selectedWeekStart: viewedWeek,
@@ -164,15 +169,22 @@ struct ContentView: View {
             }
             .animation(motion(Motion.snappy), value: updates.available)
         }
-        .frame(minWidth: 460, minHeight: 620)
+        .frame(minWidth: 560, minHeight: 620)
         .navigationTitle(showingStats ? stats.title : WeekMath.weekLabel(for: viewedWeek))
         .navigationSubtitle(shownTotalMinutes == 0
                             ? "Nothing logged"
                             : "\(Duration.format(minutes: shownTotalMinutes)) logged")
         .toolbar { weekToolbar }
-        // The two pages that take the week's place take turns.
-        .onChange(of: showingStats) { if showingStats { showingFriends = false } }
-        .onChange(of: showingFriends) { if showingFriends { showingStats = false } }
+        // The pages that take the week's place take turns.
+        .onChange(of: showingStats) {
+            if showingStats { showingFriends = false; showingGlobal = false }
+        }
+        .onChange(of: showingFriends) {
+            if showingFriends { showingStats = false; showingGlobal = false }
+        }
+        .onChange(of: showingGlobal) {
+            if showingGlobal { showingStats = false; showingFriends = false }
+        }
         // Every change goes out to the group, if you're in one.
         .onAppear { friends.storeChanged(store, after: 0, force: true) }
         .onChange(of: store.revision) { friends.storeChanged(store) }
@@ -255,6 +267,12 @@ struct ContentView: View {
                 Label("Friends", systemImage: "person.2")
             }
             .help(showingFriends ? "Back to your week" : "Compare this week with friends")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Toggle(isOn: $showingGlobal) {
+                Label("Leaderboard", systemImage: "trophy")
+            }
+            .help(showingGlobal ? "Back to your week" : "This week's totals for everyone using TimePie")
         }
     }
 
