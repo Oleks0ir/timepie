@@ -58,6 +58,8 @@ const CalendarGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16"
 const TrophyGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
   stroke-width="1.3" stroke-linejoin="round"><path d="M4.5 2h7v4a3.5 3.5 0 0 1-7 0V2Z" />
   <path d="M4.5 3.5H2.5v1a2.5 2.5 0 0 0 2.2 2.5M11.5 3.5h2v1a2.5 2.5 0 0 1-2.2 2.5M8 9.5V12M5.5 14h5M6 12h4" /></svg>`;
+const MenuGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+  stroke-width="1.4" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>`;
 const LogGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
   stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="12" rx="2" />
   <path d="M6 1.5 H10 V3.5 H6 Z" /><path d="M5.5 7 H10.5 M5.5 9.5 H10.5 M5.5 12 H8.5" /></svg>`;
@@ -304,6 +306,18 @@ function App() {
     };
   });
 
+  // The buttons on the right of the header. A narrow window folds them into one menu.
+  const pages = [
+    { label: 'Stats', Glyph: CalendarGlyph, on: showingStats, toggle: toggleStats,
+      title: showingStats ? 'Back to your week' : 'Your time over any day, month or interval' },
+    { label: 'Log', Glyph: LogGlyph, on: showingLog, toggle: () => setShowingLog((v) => !v),
+      title: 'Everything logged this week', className: 'log-toggle' },
+    { label: 'Friends', Glyph: PeopleGlyph, on: showingFriends, toggle: toggleFriends,
+      title: showingFriends ? 'Back to your week' : 'Compare this week with friends' },
+    { label: 'Leaderboard', Glyph: TrophyGlyph, on: showingGlobal, toggle: toggleGlobal,
+      title: showingGlobal ? 'Back to your week' : 'This week\u2019s totals for everyone using TimePie' },
+  ];
+
   // On the stats page the header shows its span, and the arrows step through it.
   const unit = showingStats ? W.Stats.unitName(stats) : 'week';
   const stuck = showingStats && stats.mode === 'allTime';
@@ -325,22 +339,11 @@ function App() {
           <${Chevron} dir="right" />
         </button>
         <div class="header-tools">
-          <button class="tool ${showingStats ? 'on' : ''}" onClick=${toggleStats}
-            title=${showingStats ? 'Back to your week' : 'Your time over any day, month or interval'}>
-            <${CalendarGlyph} />
-          </button>
-          <button class="tool log-toggle ${showingLog ? 'on' : ''}" onClick=${() => setShowingLog((v) => !v)}
-            title="Everything logged this week">
-            <${LogGlyph} />
-          </button>
-          <button class="tool ${showingFriends ? 'on' : ''}" onClick=${toggleFriends}
-            title=${showingFriends ? 'Back to your week' : 'Compare this week with friends'}>
-            <${PeopleGlyph} />
-          </button>
-          <button class="tool ${showingGlobal ? 'on' : ''}" onClick=${toggleGlobal}
-            title=${showingGlobal ? 'Back to your week' : 'This week\u2019s totals for everyone using TimePie'}>
-            <${TrophyGlyph} />
-          </button>
+          ${pages.map((p) => html`
+            <button key=${p.label} class="tool ${p.className ?? ''} ${p.on ? 'on' : ''}" onClick=${p.toggle} title=${p.title}>
+              <${p.Glyph} />
+            </button>`)}
+          <${PagesMenu} pages=${pages} />
         </div>
         ${showingLog && html`<${LogPanel} week=${viewedWeek} onClose=${() => setShowingLog(false)} />`}
       </div>
@@ -525,6 +528,38 @@ function StatsCalendar({ selection: s, onChange }) {
         })}
       </div>
       <div class="caption cal-hint">${hint ?? '\u00a0'}</div>
+    </div>
+  `;
+}
+
+/** The header's buttons in one ☰ menu, for when the window is too narrow to show them. */
+function PagesMenu({ pages }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const esc = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', away);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+
+  return html`
+    <div class="pages-menu" ref=${ref}>
+      <button class="tool log-toggle ${open || pages.some((p) => p.on) ? 'on' : ''}" onClick=${() => setOpen((v) => !v)}
+        title="Stats, log, friends and leaderboard"><${MenuGlyph} /></button>
+      ${open && html`
+        <div class="pages-menu-list">
+          ${pages.map((p) => html`
+            <button key=${p.label} class="pages-menu-item ${p.className ?? ''} ${p.on ? 'on' : ''}" title=${p.title}
+              onClick=${() => { setOpen(false); p.toggle(); }}>
+              <${p.Glyph} /><span>${p.label}</span>${p.on && html`<span class="check">✓</span>`}
+            </button>`)}
+        </div>`}
     </div>
   `;
 }

@@ -227,6 +227,8 @@ button { font: inherit; color: inherit; cursor: default; }
 .header { position: relative; }
 .header-tools {
   position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px;
+  /* Its transform makes it a layer of its own, which the menu inside must lift above the page. */
+  z-index: 16;
 }
 .tool {
   width: 34px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted);
@@ -411,3 +413,22 @@ button { font: inherit; color: inherit; cursor: default; }
 }
 .global-notice-title { font-weight: 600; }
 .global-notice-never { color: var(--secondary); margin-top: 2px; }
+
+/* The header's buttons fold into one menu when the window is too narrow for them. */
+.pages-menu { display: none; position: relative; }
+.pages-menu-list {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 16; min-width: 170px; padding: 4px;
+  background: var(--popover-bg); border: 1px solid var(--divider); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); display: flex; flex-direction: column;
+}
+.pages-menu-item {
+  display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 0; border-radius: 5px;
+  background: none; text-align: left; color: var(--primary);
+}
+.pages-menu-item:hover { background: var(--hover); }
+.pages-menu-item span:first-of-type { flex: 1; }
+.pages-menu-item.on { color: var(--accent); }
+@media (max-width: 549px) {
+  .header-tools > .tool { display: none; }
+  .pages-menu { display: block; }
+}

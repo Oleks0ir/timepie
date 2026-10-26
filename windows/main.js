@@ -23,7 +23,7 @@ function createWindow() {
     title: 'TimePie',
     width: 580,
     height: 700,
-    minWidth: 560,
+    minWidth: 460,
     minHeight: 620,
     useContentSize: true,
     show: false,
