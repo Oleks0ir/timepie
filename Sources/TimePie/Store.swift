@@ -228,18 +228,36 @@ final class Store {
         }
     }
 
-    /// The typed value is a week *total*; the difference is written as an adjustment
-    /// dated to the currently selected logging day.
+    /// The typed value is a week *total*; the difference is written as adjustments.
+    /// Time added goes on the selected logging day. Time taken away comes off the days
+    /// holding the most of it, so no day ever drops below zero: a timer left running
+    /// overnight, corrected here, would otherwise leave one day with far too much and
+    /// another with less than nothing.
     func setTotal(_ target: Int, for activityID: UUID,
                   weekStart: Date, weekEnd: Date, on day: Date) {
         let current = minutes(activityID: activityID, from: weekStart, to: weekEnd)
         let delta = target - current
         guard delta != 0 else { return }
+        var changes = [(day: WeekMath.startOfDay(day), minutes: delta)]
+        if delta < 0 {
+            var byDay = entries(from: weekStart, to: weekEnd)
+                .filter { $0.activityID == activityID }
+                .reduce(into: [Date: Int]()) { $0[$1.day, default: 0] += $1.minutes }
+            var left = -delta
+            changes = []
+            while left > 0, let most = byDay.filter({ $0.value > 0 }).max(by: { $0.value < $1.value }) {
+                let take = min(most.value, left)
+                changes.append((most.key, -take))
+                byDay[most.key] = most.value - take
+                left -= take
+            }
+            if left > 0 { changes.append((WeekMath.startOfDay(day), -left)) }
+        }
         mutate {
-            entries.append(Entry(activityID: activityID,
-                                 day: WeekMath.startOfDay(day),
-                                 minutes: delta,
-                                 isAdjustment: true))
+            for change in changes {
+                entries.append(Entry(activityID: activityID, day: change.day,
+                                     minutes: change.minutes, isAdjustment: true))
+            }
         }
     }
 

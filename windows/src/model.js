@@ -323,11 +323,33 @@ export class Store {
     this.#mutate(() => this.entries.push(this.#entry(activityID, day, minutes, false)));
   }
 
-  /** The typed value is a week *total*; the difference is written as an adjustment. */
+  /**
+   * The typed value is a week *total*; the difference is written as adjustments. Time
+   * added goes on the selected logging day. Time taken away comes off the days holding
+   * the most of it, so no day ever drops below zero.
+   */
   setTotal(target, activityID, start, end, day) {
     const delta = target - this.minutes(activityID, start, end);
     if (delta === 0) return;
-    this.#mutate(() => this.entries.push(this.#entry(activityID, day, delta, true)));
+    let changes = [[day, delta]];
+    if (delta < 0) {
+      const byDay = new Map();
+      for (const e of this.entriesIn(start, end)) {
+        if (e.activityID === activityID) byDay.set(e.day, (byDay.get(e.day) ?? 0) + e.minutes);
+      }
+      let left = -delta;
+      changes = [];
+      while (left > 0) {
+        const most = [...byDay].filter(([, m]) => m > 0).sort((a, b) => b[1] - a[1])[0];
+        if (!most) break;
+        const take = Math.min(most[1], left);
+        changes.push([DayStamp.parse(most[0]), -take]);
+        byDay.set(most[0], most[1] - take);
+        left -= take;
+      }
+      if (left > 0) changes.push([day, -left]);
+    }
+    this.#mutate(() => changes.forEach(([d, m]) => this.entries.push(this.#entry(activityID, d, m, true))));
   }
 
   /** Takes back one logged amount, from the log. */
