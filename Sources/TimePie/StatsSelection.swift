@@ -2,8 +2,8 @@ import Foundation
 
 /// The stretch of days the stats page shows, and how clicks on its calendar move it.
 ///
-/// One click shows that day. A click on another day after it stretches the selection
-/// into the interval between the two, and the click after that starts over with a day.
+/// A click shows that day. In Interval, clicks come in pairs instead: the first day,
+/// then the last, and the click after that starts the next interval.
 struct StatsSelection: Equatable {
     enum Mode: String, CaseIterable, Identifiable {
         case day = "Day"
@@ -22,11 +22,8 @@ struct StatsSelection: Equatable {
     var shownMonth: Date
     /// The day last clicked: where Day and Interval begin when picked.
     private var focus: Date
-    /// A day was just clicked, so the next click on another day makes an interval.
+    /// An interval's first day was just clicked, so the next click ends it.
     private var anchored = false
-    /// Interval was picked by hand, so every click goes on picking intervals rather
-    /// than falling back to a single day.
-    private var intervalPicked = false
 
     init(today: Date = Date()) {
         let day = WeekMath.startOfDay(today)
@@ -48,7 +45,6 @@ struct StatsSelection: Equatable {
         switch (mode, anchored) {
         case (.interval, false) where start == end: "Click the first day"
         case (.interval, true): "Click the last day"
-        case (.day, true): "Click another day to see the days between"
         default: nil
         }
     }
@@ -56,19 +52,18 @@ struct StatsSelection: Equatable {
     mutating func click(_ date: Date) {
         let day = WeekMath.startOfDay(date)
         focus = day
-        if anchored {
+        if mode == .interval && anchored {
             guard day != start else { return }
             let first = start
             start = min(first, day)
             end = max(first, day)
-            mode = .interval
             anchored = false
         } else {
-            // An interval picked by hand stays one, waiting for its last day.
-            mode = intervalPicked ? .interval : .day
+            // Outside Interval a click is just that day, even from Month or All Time.
+            if mode != .interval { mode = .day }
             start = day
             end = day
-            anchored = true
+            anchored = mode == .interval
         }
     }
 
@@ -76,7 +71,6 @@ struct StatsSelection: Equatable {
     mutating func pick(_ mode: Mode, logged: ClosedRange<Date>?, today: Date = Date()) {
         self.mode = mode
         anchored = false
-        intervalPicked = mode == .interval
         switch mode {
         case .day, .interval:
             start = focus

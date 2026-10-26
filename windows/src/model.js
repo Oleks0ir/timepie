@@ -490,8 +490,8 @@ function sortKeys(value) {
 
 /**
  * The stretch of days the stats page shows, and how clicks on its calendar move it.
- * One click shows that day. A click on another day after it stretches the selection
- * into the interval between the two, and the click after that starts over with a day.
+ * A click shows that day. In Interval, clicks come in pairs instead: the first day,
+ * then the last, and the click after that starts the next interval.
  * Each function returns a new selection.
  */
 export const Stats = {
@@ -500,10 +500,8 @@ export const Stats = {
   initial(today = new Date()) {
     const day = startOfDay(today);
     // `focus` is the day last clicked: where Day and Interval begin when picked.
-    // `anchored`: a day was just clicked, so the next click on another day makes an interval.
-    // `intervalPicked`: Interval was picked by hand, so clicks go on picking intervals.
-    return { mode: 'day', start: day, end: day, shownMonth: monthStart(day), focus: day,
-      anchored: false, intervalPicked: false };
+    // `anchored`: an interval's first day was just clicked, so the next click ends it.
+    return { mode: 'day', start: day, end: day, shownMonth: monthStart(day), focus: day, anchored: false };
   },
 
   dayCount: (s) => daysBetween(s.start, s.end) + 1,
@@ -512,24 +510,24 @@ export const Stats = {
   hint(s) {
     if (s.mode === 'interval' && !s.anchored && s.start.getTime() === s.end.getTime()) return 'Click the first day';
     if (s.mode === 'interval' && s.anchored) return 'Click the last day';
-    if (s.mode === 'day' && s.anchored) return 'Click another day to see the days between';
     return null;
   },
 
   click(s, date) {
     const day = startOfDay(date);
-    if (s.anchored) {
+    if (s.mode === 'interval' && s.anchored) {
       if (day.getTime() === s.start.getTime()) return s;
       const [start, end] = day < s.start ? [day, s.start] : [s.start, day];
-      return { ...s, mode: 'interval', start, end, focus: day, anchored: false };
+      return { ...s, start, end, focus: day, anchored: false };
     }
-    // An interval picked by hand stays one, waiting for its last day.
-    return { ...s, mode: s.intervalPicked ? 'interval' : 'day', start: day, end: day, focus: day, anchored: true };
+    // Outside Interval a click is just that day, even from Month or All Time.
+    const mode = s.mode === 'interval' ? 'interval' : 'day';
+    return { ...s, mode, start: day, end: day, focus: day, anchored: mode === 'interval' };
   },
 
   /** `logged` is the first and last day with time on it, for All Time. */
   pick(s, mode, logged, today = new Date()) {
-    const next = { ...s, mode, anchored: false, intervalPicked: mode === 'interval' };
+    const next = { ...s, mode, anchored: false };
     if (mode === 'allTime') {
       const day = startOfDay(today);
       next.start = logged && logged.first < day ? logged.first : day;
