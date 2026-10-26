@@ -190,6 +190,25 @@ final class Store {
             .reduce(0) { $0 + $1.minutes }
     }
 
+    /// Every activity's time between two days, in one pass over the entries.
+    func minutesByActivity(from start: Date, to end: Date) -> [UUID: Int] {
+        entries(from: start, to: end).reduce(into: [:]) { $0[$1.activityID, default: 0] += $1.minutes }
+    }
+
+    /// Each day's time between two days, keyed by start of day.
+    func minutesByDay(from start: Date, to end: Date) -> [Date: Int] {
+        let known = Set(activities.map(\.id))
+        return entries(from: start, to: end)
+            .filter { known.contains($0.activityID) }
+            .reduce(into: [:]) { $0[$1.day, default: 0] += $1.minutes }
+    }
+
+    /// The first and last day anything was logged on, or nil before anything has been.
+    var loggedSpan: ClosedRange<Date>? {
+        guard let first = entries.map(\.day).min(), let last = entries.map(\.day).max() else { return nil }
+        return first...last
+    }
+
     /// Counts only entries belonging to an activity that still exists, so the header
     /// total can never disagree with the sum of the donut's wedges.
     func totalMinutes(from start: Date, to end: Date) -> Int {

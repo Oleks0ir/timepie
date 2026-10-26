@@ -25,6 +25,28 @@ export function weekStart(d) {
 export const weekEnd = (d) => addDays(7, weekStart(d));
 export const isSameWeek = (a, b) => weekStart(a).getTime() === weekStart(b).getTime();
 
+export function monthStart(d) {
+  const x = startOfDay(d);
+  x.setDate(1);
+  return x;
+}
+
+export function addMonths(n, d) {
+  const x = new Date(d);
+  x.setDate(1);
+  x.setMonth(x.getMonth() + n);
+  // Keep the day where the month has it, else the month's last day (Jan 31 → Feb 28).
+  const last = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate();
+  x.setDate(Math.min(new Date(d).getDate(), last));
+  return x;
+}
+
+/** The first day of the next month. */
+export const monthEnd = (d) => addMonths(1, monthStart(d));
+
+/** Whole days from one start-of-day to another. */
+export const daysBetween = (a, b) => Math.round((startOfDay(b) - startOfDay(a)) / 86400000);
+
 const monthShort = (d) => d.toLocaleDateString(undefined, { month: 'short' });
 
 /** "Sep 15 – 21" / "Sep 29 – Oct 5" */
@@ -236,6 +258,16 @@ export class Store {
       .map((x) => x.id);
   }
 
+  /** Every task in the order the lists draw them, ignoring weeks. */
+  get orderedActivities() {
+    const tasks = this.visibleActivities;
+    const known = new Set(this.folders.map((f) => f.id));
+    return [
+      ...this.folders.map((f) => [f.sortIndex, tasks.filter((a) => a.folderID === f.id)]),
+      ...tasks.filter((a) => !known.has(a.folderID)).map((a) => [a.sortIndex, [a]]),
+    ].sort((x, y) => x[0] - y[0]).flatMap((x) => x[1]);
+  }
+
   entriesIn(start, end) {
     const lo = DayStamp.string(start);
     const hi = DayStamp.string(end);
@@ -246,6 +278,30 @@ export class Store {
     return this.entriesIn(start, end)
       .filter((e) => e.activityID === activityID)
       .reduce((sum, e) => sum + e.minutes, 0);
+  }
+
+  /** Every activity's time between two days, in one pass over the entries. */
+  minutesByActivity(start, end) {
+    const out = new Map();
+    for (const e of this.entriesIn(start, end)) out.set(e.activityID, (out.get(e.activityID) ?? 0) + e.minutes);
+    return out;
+  }
+
+  /** Each day's time between two days, keyed by its "2026-09-16" stamp. */
+  minutesByDay(start, end) {
+    const known = new Set(this.activities.map((a) => a.id));
+    const out = new Map();
+    for (const e of this.entriesIn(start, end)) {
+      if (known.has(e.activityID)) out.set(e.day, (out.get(e.day) ?? 0) + e.minutes);
+    }
+    return out;
+  }
+
+  /** The first and last day anything was logged on, or null before anything has been. */
+  get loggedSpan() {
+    if (!this.entries.length) return null;
+    const days = this.entries.map((e) => e.day).sort();
+    return { first: DayStamp.parse(days[0]), last: DayStamp.parse(days.at(-1)) };
   }
 
   /** Only activities that still exist, so the header can't disagree with the donut. */
@@ -429,3 +485,105 @@ function sortKeys(value) {
   }
   return value;
 }
+
+// MARK: - The stats page's span (port of StatsSelection.swift)
+
+/**
+ * The stretch of days the stats page shows, and how clicks on its calendar move it.
+ * One click shows that day. A click on another day after it stretches the selection
+ * into the interval between the two, and the click after that starts over with a day.
+ * Each function returns a new selection.
+ */
+export const Stats = {
+  modes: [['day', 'Day'], ['month', 'Month'], ['interval', 'Interval'], ['allTime', 'All Time']],
+
+  initial(today = new Date()) {
+    const day = startOfDay(today);
+    // `focus` is the day last clicked: where Day and Interval begin when picked.
+    // `anchored`: a day was just clicked, so the next click on another day makes an interval.
+    // `intervalPicked`: Interval was picked by hand, so clicks go on picking intervals.
+    return { mode: 'day', start: day, end: day, shownMonth: monthStart(day), focus: day,
+      anchored: false, intervalPicked: false };
+  },
+
+  dayCount: (s) => daysBetween(s.start, s.end) + 1,
+
+  /** What the next click does, while that isn't obvious. */
+  hint(s) {
+    if (s.mode === 'interval' && !s.anchored && s.start.getTime() === s.end.getTime()) return 'Click the first day';
+    if (s.mode === 'interval' && s.anchored) return 'Click the last day';
+    if (s.mode === 'day' && s.anchored) return 'Click another day to see the days between';
+    return null;
+  },
+
+  click(s, date) {
+    const day = startOfDay(date);
+    if (s.anchored) {
+      if (day.getTime() === s.start.getTime()) return s;
+      const [start, end] = day < s.start ? [day, s.start] : [s.start, day];
+      return { ...s, mode: 'interval', start, end, focus: day, anchored: false };
+    }
+    // An interval picked by hand stays one, waiting for its last day.
+    return { ...s, mode: s.intervalPicked ? 'interval' : 'day', start: day, end: day, focus: day, anchored: true };
+  },
+
+  /** `logged` is the first and last day with time on it, for All Time. */
+  pick(s, mode, logged, today = new Date()) {
+    const next = { ...s, mode, anchored: false, intervalPicked: mode === 'interval' };
+    if (mode === 'allTime') {
+      const day = startOfDay(today);
+      next.start = logged && logged.first < day ? logged.first : day;
+      next.end = logged && logged.last > day ? logged.last : day;
+      return next;
+    }
+    if (mode === 'month') {
+      next.start = s.shownMonth;
+      next.end = addDays(-1, monthEnd(s.shownMonth));
+    } else {
+      next.start = s.focus;
+      next.end = s.focus;
+    }
+    next.shownMonth = monthStart(next.start);
+    return next;
+  },
+
+  /** The previous or next day, month or interval of the same length. */
+  step(s, n) {
+    let start, end;
+    if (s.mode === 'day') {
+      start = end = addDays(n, s.start);
+    } else if (s.mode === 'month') {
+      start = addMonths(n, s.start);
+      end = addDays(-1, monthEnd(start));
+    } else if (s.mode === 'interval') {
+      const length = Stats.dayCount(s);
+      start = addDays(n * length, s.start);
+      end = addDays(n * length, s.end);
+    } else {
+      return s;
+    }
+    return { ...s, start, end, focus: start, anchored: false, shownMonth: monthStart(start) };
+  },
+
+  /** The step the arrows take, for their labels. */
+  unitName: (s) => ({ day: 'day', month: 'month' })[s.mode] ?? 'interval',
+
+  /** "Today", "Mon, Oct 26", "October 2026", "Oct 3 – 17", "All Time". */
+  title(s) {
+    if (s.mode === 'allTime') return 'All Time';
+    if (s.mode === 'month') return s.start.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const thisYear = new Date().getFullYear();
+    if (s.start.getTime() === s.end.getTime()) {
+      const today = startOfDay(new Date());
+      if (s.start.getTime() === today.getTime()) return 'Today';
+      if (s.start.getTime() === addDays(-1, today).getTime()) return 'Yesterday';
+      return s.start.getFullYear() === thisYear
+        ? s.start.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+        : s.start.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    // Left to the system, which knows how a range of dates reads in your language.
+    const sameYear = s.start.getFullYear() === thisYear && s.end.getFullYear() === thisYear;
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })
+      .formatRange(s.start, s.end);
+  },
+};

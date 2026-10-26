@@ -17,6 +17,10 @@ struct ContentView: View {
     /// The log of what's been added this week, dropped down from the toolbar.
     /// TIMEPIE_SHOW_LOG opens on it, for a test run.
     @State private var showingLog = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_LOG"] != nil
+    /// Your time over any day, month or interval in place of the week.
+    /// TIMEPIE_SHOW_STATS opens on it, for a test run.
+    @State private var showingStats = ProcessInfo.processInfo.environment["TIMEPIE_SHOW_STATS"] != nil
+    @State private var stats = StatsSelection()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The row being dragged by its handle, and how far it has travelled.
@@ -120,7 +124,9 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
-                if showingFriends {
+                if showingStats {
+                    StatsView(selection: $stats)
+                } else if showingFriends {
                     FriendsView(week: viewedWeek)
                 } else {
                     chart
@@ -147,7 +153,7 @@ struct ContentView: View {
                     .padding([.horizontal, .bottom], 12)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
-                if !showingFriends {
+                if !showingFriends && !showingStats {
                     HistoryStrip(
                         weeks: historyThumbs(),
                         selectedWeekStart: viewedWeek,
@@ -159,11 +165,14 @@ struct ContentView: View {
             .animation(motion(Motion.snappy), value: updates.available)
         }
         .frame(minWidth: 460, minHeight: 620)
-        .navigationTitle(WeekMath.weekLabel(for: viewedWeek))
-        .navigationSubtitle(weekTotalMinutes == 0
+        .navigationTitle(showingStats ? stats.title : WeekMath.weekLabel(for: viewedWeek))
+        .navigationSubtitle(shownTotalMinutes == 0
                             ? "Nothing logged"
-                            : "\(Duration.format(minutes: weekTotalMinutes)) logged")
+                            : "\(Duration.format(minutes: shownTotalMinutes)) logged")
         .toolbar { weekToolbar }
+        // The two pages that take the week's place take turns.
+        .onChange(of: showingStats) { if showingStats { showingFriends = false } }
+        .onChange(of: showingFriends) { if showingFriends { showingStats = false } }
         // Every change goes out to the group, if you're in one.
         .onAppear { friends.storeChanged(store, after: 0, force: true) }
         .onChange(of: store.revision) { friends.storeChanged(store) }
@@ -196,11 +205,11 @@ struct ContentView: View {
         .focusEffectDisabled()
         .onAppear { rootFocused = true }
         .onKeyPress(.leftArrow) {
-            select(week: WeekMath.addWeeks(-1, to: viewedWeek))
+            step(-1)
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            select(week: WeekMath.addWeeks(1, to: viewedWeek))
+            step(1)
             return .handled
         }
     }
@@ -208,20 +217,29 @@ struct ContentView: View {
     // MARK: - Toolbar
 
     /// Week navigation lives in the window's toolbar, the way Calendar does it: arrows
-    /// on the left beside the week as the window title. The log and the group sit on the right.
+    /// on the left beside the week as the window title. On the stats page they step
+    /// through days, months or intervals instead. Stats, the log and the group sit on the right.
     @ToolbarContentBuilder
     private var weekToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
+            let unit = showingStats ? stats.unitName : "Week"
             ControlGroup {
-                Button { select(week: WeekMath.addWeeks(-1, to: viewedWeek)) } label: {
-                    Label("Previous Week", systemImage: "chevron.left")
+                Button { step(-1) } label: {
+                    Label("Previous \(unit)", systemImage: "chevron.left")
                 }
-                .help("Previous week (←)")
-                Button { select(week: WeekMath.addWeeks(1, to: viewedWeek)) } label: {
-                    Label("Next Week", systemImage: "chevron.right")
+                .help("Previous \(unit.lowercased()) (←)")
+                Button { step(1) } label: {
+                    Label("Next \(unit)", systemImage: "chevron.right")
                 }
-                .help("Next week (→)")
+                .help("Next \(unit.lowercased()) (→)")
             }
+            .disabled(showingStats && stats.mode == .allTime)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Toggle(isOn: $showingStats) {
+                Label("Stats", systemImage: "calendar")
+            }
+            .help(showingStats ? "Back to your week" : "Your time over any day, month or interval")
         }
         ToolbarItem(placement: .primaryAction) {
             Toggle(isOn: $showingLog) {
@@ -498,6 +516,13 @@ struct ContentView: View {
         store.totalMinutes(from: viewedWeek, to: weekEnd)
     }
 
+    /// The total in the window's subtitle: the week's, or the stats page's span.
+    private var shownTotalMinutes: Int {
+        showingStats
+            ? store.totalMinutes(from: stats.start, to: stats.endExclusive)
+            : weekTotalMinutes
+    }
+
     /// Every activity, not just this week's: the chart keeps the same slices from week
     /// to week (the ones without time there are empty), so flipping weeks animates.
     private func slices() -> [Slice] {
@@ -528,6 +553,15 @@ struct ContentView: View {
     }
 
     // MARK: - Navigation
+
+    /// ← / →: a week, or on the stats page whatever span it shows.
+    private func step(_ n: Int) {
+        if showingStats {
+            withAnimation(motion(Motion.snappy)) { stats.step(n) }
+        } else {
+            select(week: WeekMath.addWeeks(n, to: viewedWeek))
+        }
+    }
 
     private func select(week: Date) {
         viewedWeek = WeekMath.weekStart(for: week)

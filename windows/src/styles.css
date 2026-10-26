@@ -349,3 +349,53 @@ button { font: inherit; color: inherit; cursor: default; }
 .or span { flex: 1; height: 1px; background: var(--divider); }
 .join-row { display: flex; gap: 8px; }
 .code-field { width: 140px; font-family: ui-monospace, Consolas, monospace; }
+
+/* Stats */
+
+.stats { flex: 1 1 auto; overflow-y: auto; padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.stats-modes { align-self: center; }
+.chev:disabled { opacity: 0.35; background: transparent; }
+
+.calendar { padding: 8px 10px 4px; }
+.cal-head { display: flex; align-items: center; gap: 2px; padding: 0 0 4px 6px; }
+.cal-month { font-weight: 600; font-size: 14px; }
+.cal-today {
+  border: 0; background: none; color: var(--accent); font-size: 12px; padding: 4px 8px; border-radius: 6px;
+}
+.cal-today:hover:not(:disabled) { background: var(--hover); }
+.cal-today:disabled { color: var(--muted); opacity: 0.6; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 2px; }
+.cal-weekday { text-align: center; font-size: 11px; font-weight: 500; color: var(--muted); padding: 2px 0 4px; }
+.cal-day { position: relative; height: 34px; border: 0; background: none; padding: 0; display: grid; place-items: center; }
+/* The band joining the selected days, from the first day's circle to the last's,
+   rounded off where a week wraps onto the next row. */
+.cal-day.in-range::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 1px; bottom: 1px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.cal-day.range-start::before { left: 50%; }
+.cal-day.range-end::before { right: 50%; }
+.cal-day.row-start::before { border-radius: 16px 0 0 16px; }
+.cal-day.row-end::before { border-radius: 0 16px 16px 0; }
+.cal-day.row-start.row-end::before { border-radius: 16px; }
+.cal-circle {
+  position: relative; width: 32px; height: 32px; border-radius: 50%; font-size: 13px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+}
+.cal-circle i { width: 4px; height: 4px; border-radius: 50%; }
+.cal-circle i.logged { background: var(--muted); }
+.cal-day:hover .cal-circle { background: var(--hover-strong); }
+.cal-day.outside { color: var(--muted); }
+.cal-day.today { color: var(--accent); font-weight: 600; }
+.cal-day.end .cal-circle { background: var(--accent); color: white; font-weight: 600; }
+.cal-day.end .cal-circle i.logged { background: rgba(255, 255, 255, 0.8); }
+.cal-hint { text-align: center; padding: 4px 0 2px; }
+
+.stats-chart { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 6px 0; }
+.stats-average { color: var(--muted); font-size: 12px; }
+.stats-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 6px; }
+.stats-row.hovered { background: var(--hover); }
+.stats-row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.stats-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stats-row .percent { color: var(--muted); }
+.stats-row .amount { min-width: 64px; text-align: right; }

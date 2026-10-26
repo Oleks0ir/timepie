@@ -32,6 +32,28 @@ enum WeekMath {
         calendar.date(byAdding: .day, value: n, to: date) ?? date
     }
 
+    static func monthStart(for date: Date) -> Date {
+        let cal = calendar
+        guard let interval = cal.dateInterval(of: .month, for: date) else {
+            return cal.startOfDay(for: date)
+        }
+        return cal.startOfDay(for: interval.start)
+    }
+
+    /// The first day of the next month.
+    static func monthEnd(for date: Date) -> Date {
+        addMonths(1, to: monthStart(for: date))
+    }
+
+    static func addMonths(_ n: Int, to date: Date) -> Date {
+        calendar.date(byAdding: .month, value: n, to: date) ?? date
+    }
+
+    /// Whole days from one start-of-day to another.
+    static func days(from start: Date, to end: Date) -> Int {
+        calendar.dateComponents([.day], from: startOfDay(start), to: startOfDay(end)).day ?? 0
+    }
+
     static func isSameWeek(_ a: Date, _ b: Date) -> Bool {
         weekStart(for: a) == weekStart(for: b)
     }

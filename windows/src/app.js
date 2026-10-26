@@ -53,6 +53,8 @@ const FolderPlusGlyph = () => html`<svg width="16" height="13" viewBox="0 0 16 1
 const PeopleGlyph = () => html`<svg width="18" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor"
   stroke-width="1.2" stroke-linecap="round"><circle cx="6.5" cy="4" r="2.6" /><path d="M1.5 12.5 Q1.5 8 6.5 8 Q11.5 8 11.5 12.5" />
   <circle cx="12.5" cy="4.2" r="2.1" /><path d="M12.5 7.8 Q16.5 7.8 16.5 12" /></svg>`;
+const CalendarGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+  stroke-width="1.3"><rect x="2" y="3" width="12" height="11" rx="2" /><path d="M2 6.5h12M5 1.5v3M11 1.5v3" /></svg>`;
 const LogGlyph = () => html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
   stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="12" rx="2" />
   <path d="M6 1.5 H10 V3.5 H6 Z" /><path d="M5.5 7 H10.5 M5.5 9.5 H10.5 M5.5 12 H8.5" /></svg>`;
@@ -74,6 +76,9 @@ function App() {
   const [showingFriends, setShowingFriends] = useState(false);
   // The log of what's been added this week, dropped down from the header.
   const [showingLog, setShowingLog] = useState(false);
+  // Your time over any day, month or interval in place of the week.
+  const [showingStats, setShowingStats] = useState(false);
+  const [stats, setStats] = useState(() => W.Stats.initial());
   // The row being dragged by its handle: { id, isFolder, from, offset, stride, slot, into }.
   // `slot` is where the gap is, as an index into the rows without the lifted one;
   // `into` is a folder the lifted task is held over, to drop it in.
@@ -87,6 +92,8 @@ function App() {
   runningRef.current = running;
   const weekRef = useRef(viewedWeek);
   weekRef.current = viewedWeek;
+  const showingStatsRef = useRef(showingStats);
+  showingStatsRef.current = showingStats;
 
   useEffect(() => {
     if (!running) return;
@@ -130,12 +137,28 @@ function App() {
     setLoggingDay(W.isSameWeek(start, new Date()) ? W.startOfDay(new Date()) : start);
   };
 
+  /** ← / →: a week, or on the stats page whatever span it shows. */
+  const step = (n) => {
+    if (showingStatsRef.current) setStats((s) => W.Stats.step(s, n));
+    else select(W.addWeeks(n, weekRef.current));
+  };
+
+  // The two pages that take the week's place take turns.
+  const toggleStats = () => {
+    setShowingStats((v) => !v);
+    setShowingFriends(false);
+  };
+  const toggleFriends = () => {
+    setShowingFriends((v) => !v);
+    setShowingStats(false);
+  };
+
   // ← and → step through weeks, unless a text field is taking the arrow keys.
   useEffect(() => {
     const onKey = (e) => {
       if (isTyping() || e.ctrlKey || e.altKey || e.metaKey) return;
-      if (e.key === 'ArrowLeft') select(W.addWeeks(-1, weekRef.current));
-      if (e.key === 'ArrowRight') select(W.addWeeks(1, weekRef.current));
+      if (e.key === 'ArrowLeft') step(-1);
+      if (e.key === 'ArrowRight') step(1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -269,26 +292,36 @@ function App() {
     };
   });
 
+  // On the stats page the header shows its span, and the arrows step through it.
+  const unit = showingStats ? W.Stats.unitName(stats) : 'week';
+  const stuck = showingStats && stats.mode === 'allTime';
+
   return html`
     <div class="app">
       <div class="header">
-        <button class="chev" onClick=${() => select(W.addWeeks(-1, viewedWeek))} title="Previous week (←)">
+        <button class="chev" onClick=${() => step(-1)} title="Previous ${unit} (←)" disabled=${stuck}>
           <${Chevron} dir="left" />
         </button>
         <div class="week-label">
-          <span class="title">${W.weekLabel(viewedWeek)}</span>
+          <span class="title">${showingStats ? W.Stats.title(stats) : W.weekLabel(viewedWeek)}</span>
           <span class="sep">·</span>
-          <span class="total num">${Duration.format(weekTotal)}</span>
+          <span class="total num">${Duration.format(showingStats
+            ? store.totalMinutes(stats.start, W.addDays(1, stats.end))
+            : weekTotal)}</span>
         </div>
-        <button class="chev" onClick=${() => select(W.addWeeks(1, viewedWeek))} title="Next week (→)">
+        <button class="chev" onClick=${() => step(1)} title="Next ${unit} (→)" disabled=${stuck}>
           <${Chevron} dir="right" />
         </button>
         <div class="header-tools">
+          <button class="tool ${showingStats ? 'on' : ''}" onClick=${toggleStats}
+            title=${showingStats ? 'Back to your week' : 'Your time over any day, month or interval'}>
+            <${CalendarGlyph} />
+          </button>
           <button class="tool log-toggle ${showingLog ? 'on' : ''}" onClick=${() => setShowingLog((v) => !v)}
             title="Everything logged this week">
             <${LogGlyph} />
           </button>
-          <button class="tool ${showingFriends ? 'on' : ''}" onClick=${() => setShowingFriends((v) => !v)}
+          <button class="tool ${showingFriends ? 'on' : ''}" onClick=${toggleFriends}
             title=${showingFriends ? 'Back to your week' : 'Compare this week with friends'}>
             <${PeopleGlyph} />
           </button>
@@ -299,7 +332,8 @@ function App() {
       ${update && !updateDismissed && html`
         <${UpdateNotice} update=${update} onClose=${() => setUpdateDismissed(true)} />`}
 
-      ${showingFriends ? html`<${FriendsView} week=${viewedWeek} />` : html`
+      ${showingStats ? html`<${StatsView} selection=${stats} onChange=${setStats} />`
+        : showingFriends ? html`<${FriendsView} week=${viewedWeek} />` : html`
       <div class="chart">
         <${Donut} slices=${slices} size=${250} hoveredID=${hoveredID} onHover=${setHoveredID} animate />
       </div>
@@ -360,6 +394,120 @@ function App() {
       </div>
 
       <${HistoryStrip} weeks=${thumbs} selected=${viewedWeek.getTime()} onSelect=${select} />`}
+    </div>
+  `;
+}
+
+// MARK: - Stats
+
+/**
+ * Your time over any stretch of days — one day, a month, an interval or all of it —
+ * picked on a calendar. Read-only: logging stays on the week.
+ */
+function StatsView({ selection: s, onChange }) {
+  const store = useStore();
+  const [hoveredID, setHoveredID] = useState(null);
+
+  const byActivity = store.minutesByActivity(s.start, W.addDays(1, s.end));
+  const slices = store.orderedActivities.map((a) => ({
+    id: a.id, name: a.name, minutes: Math.max(0, byActivity.get(a.id) ?? 0), colorSlot: a.colorSlot,
+  }));
+  const total = slices.reduce((sum, x) => sum + x.minutes, 0);
+  const days = W.Stats.dayCount(s);
+  // What the chart is made of, biggest first.
+  const shown = slices.filter((x) => x.minutes > 0).sort((a, b) => b.minutes - a.minutes);
+
+  return html`
+    <div class="stats">
+      <div class="segmented stats-modes">
+        ${W.Stats.modes.map(([mode, label]) => html`
+          <button key=${mode} class=${s.mode === mode ? 'on' : ''}
+            onClick=${() => onChange(W.Stats.pick(s, mode, store.loggedSpan))}>${label}</button>`)}
+      </div>
+
+      <${StatsCalendar} selection=${s} onChange=${onChange} />
+
+      <div class="stats-chart">
+        <${Donut} slices=${slices} size=${220} hoveredID=${hoveredID} onHover=${setHoveredID} animate />
+        ${total > 0 && days > 1 && html`
+          <div class="stats-average num">${days} days · ${Duration.format(Math.floor(total / days))} a day</div>`}
+      </div>
+
+      <div class="card stats-breakdown">
+        ${shown.length === 0 && html`
+          <div class="log-empty">${s.mode === 'allTime' ? 'Nothing logged yet' : 'Nothing logged'}</div>`}
+        ${shown.map((x) => html`
+          <div key=${x.id} class="stats-row num ${hoveredID === x.id ? 'hovered' : ''}"
+            onMouseEnter=${() => setHoveredID(x.id)} onMouseLeave=${() => setHoveredID(null)}>
+            <span class="dot" style=${{ background: slotColor(x.colorSlot) }} />
+            <span class="name">${x.name}</span>
+            <span class="spacer" />
+            <span class="percent">${Math.round((x.minutes / Math.max(total, 1)) * 100)}%</span>
+            <span class="amount">${Duration.format(x.minutes)}</span>
+          </div>`)}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * A month at a time, Monday first. The selected days are joined by one band, and a dot
+ * marks each day with time logged on it.
+ */
+function StatsCalendar({ selection: s, onChange }) {
+  const store = useStore();
+  // Six full weeks, so the grid keeps its height from month to month.
+  const first = W.weekStart(s.shownMonth);
+  const days = Array.from({ length: 42 }, (_, i) => W.addDays(i, first));
+  const logged = store.minutesByDay(days[0], W.addDays(1, days[41]));
+  const today = W.startOfDay(new Date()).getTime();
+  const thisMonth = W.monthStart(new Date()).getTime();
+  const span = s.start.getTime() !== s.end.getTime();
+  const showMonth = (month) => onChange({ ...s, shownMonth: month });
+  const hint = W.Stats.hint(s);
+
+  return html`
+    <div class="card calendar">
+      <div class="cal-head">
+        <span class="cal-month">${s.shownMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span>
+        <span class="spacer" />
+        <button class="cal-today" disabled=${s.shownMonth.getTime() === thisMonth}
+          onClick=${() => showMonth(W.monthStart(new Date()))}>Today</button>
+        <button class="chev" title="Previous month" onClick=${() => showMonth(W.addMonths(-1, s.shownMonth))}>
+          <${Chevron} dir="left" />
+        </button>
+        <button class="chev" title="Next month" onClick=${() => showMonth(W.addMonths(1, s.shownMonth))}>
+          <${Chevron} dir="right" />
+        </button>
+      </div>
+      <div class="cal-grid">
+        ${days.slice(0, 7).map((d) => html`
+          <div key=${d.getDay()} class="cal-weekday">${d.toLocaleDateString(undefined, { weekday: 'narrow' })}</div>`)}
+        ${days.map((d, i) => {
+          const t = d.getTime();
+          const isEnd = t === s.start.getTime() || t === s.end.getTime();
+          const classes = [
+            'cal-day',
+            d.getMonth() !== s.shownMonth.getMonth() && 'outside',
+            t === today && 'today',
+            isEnd && 'end',
+            span && t >= s.start.getTime() && t <= s.end.getTime() && 'in-range',
+            span && t === s.start.getTime() && 'range-start',
+            span && t === s.end.getTime() && 'range-end',
+            i % 7 === 0 && 'row-start',
+            i % 7 === 6 && 'row-end',
+          ].filter(Boolean).join(' ');
+          return html`
+            <button key=${t} class=${classes} title=${d.toLocaleDateString(undefined, { dateStyle: 'full' })}
+              onClick=${() => onChange(W.Stats.click(s, d))}>
+              <span class="cal-circle">
+                ${d.getDate()}
+                <i class=${(logged.get(W.DayStamp.string(d)) ?? 0) > 0 ? 'logged' : ''} />
+              </span>
+            </button>`;
+        })}
+      </div>
+      <div class="caption cal-hint">${hint ?? '\u00a0'}</div>
     </div>
   `;
 }
