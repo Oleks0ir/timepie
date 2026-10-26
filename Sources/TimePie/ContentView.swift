@@ -498,8 +498,10 @@ struct ContentView: View {
         store.totalMinutes(from: viewedWeek, to: weekEnd)
     }
 
+    /// Every activity, not just this week's: the chart keeps the same slices from week
+    /// to week (the ones without time there are empty), so flipping weeks animates.
     private func slices() -> [Slice] {
-        activities.map {
+        store.orderedActivities.map {
             Slice(id: $0.id, name: $0.name,
                   minutes: max(0, minutes(for: $0)), colorSlot: $0.colorSlot)
         }

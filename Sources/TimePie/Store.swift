@@ -146,6 +146,19 @@ final class Store {
         return items.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
+    /// Every task in the order the lists draw them, ignoring weeks: each week's list is
+    /// this order with some rows left out.
+    var orderedActivities: [Activity] {
+        let tasks = visibleActivities
+        let known = Set(folders.map(\.id))
+        let items = folders.map { folder in
+            (folder.sortIndex, tasks.filter { $0.folderID == folder.id })
+        } + tasks.filter { !known.contains($0.folderID ?? UUID()) }.map {
+            ($0.sortIndex, [$0])
+        }
+        return items.sorted { $0.0 < $1.0 }.flatMap(\.1)
+    }
+
     /// One group of siblings in order: the top level (folders and loose tasks) when
     /// `parent` is nil, otherwise that folder's tasks. With a week, only what it shows.
     private func siblings(in parent: UUID?, week: Date?) -> [UUID] {

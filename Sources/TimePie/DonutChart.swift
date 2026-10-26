@@ -64,23 +64,25 @@ struct DonutChart: View {
     }
 
     private var chart: some View {
-        Chart(shown) { slice in
+        // Empty slices stay in the chart, at zero and invisible, so a slice that comes
+        // or goes grows from or shrinks to nothing instead of changing the set.
+        Chart(slices) { slice in
             let lifted = hoveredID == slice.id
             SectorMark(
-                angle: .value("Minutes", slice.minutes),
+                angle: .value("Minutes", max(0, slice.minutes)),
                 innerRadius: .ratio(innerRatio),
                 outerRadius: .ratio(lifted || compact ? 1 : 0.95),
                 angularInset: compact ? 0.5 : 1.5
             )
             .cornerRadius(compact ? 1.5 : 5)
             .foregroundStyle(Palette.color(slot: slice.colorSlot))
-            .opacity(hoveredID == nil || lifted ? 1 : 0.4)
+            .opacity(slice.minutes <= 0 ? 0 : hoveredID == nil || lifted ? 1 : 0.4)
         }
         .chartLegend(.hidden)
         // Swift Charts traps when a sector animation is interrupted by a different set
         // of sectors (delete a row, then flip the week mid-animation). A new set of
         // slices gets a fresh chart instead; resizing the existing ones still animates.
-        .id(shown.map(\.id))
+        .id(slices.map(\.id))
         .animation(Motion.chart, value: slices)
         .animation(Motion.snappy, value: hoveredID)
     }
