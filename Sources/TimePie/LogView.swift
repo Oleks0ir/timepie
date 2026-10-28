@@ -126,7 +126,11 @@ struct LogView: View {
     private func detail(for entry: Entry) -> String {
         var parts = [entry.createdAt.formatted(date: .omitted, time: .shortened)]
         if !Calendar.current.isDate(entry.day, inSameDayAs: entry.createdAt) {
-            parts.append("for \(entry.day.formatted(.dateTime.weekday(.wide)))")
+            // A weekday alone only says which day within the week it was added in.
+            let day = WeekMath.isSameWeek(entry.day, entry.createdAt)
+                ? entry.day.formatted(.dateTime.weekday(.wide))
+                : entry.day.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+            parts.append("for \(day)")
         }
         if entry.isAdjustment { parts.append("total edited") }
         return parts.joined(separator: " · ")

@@ -324,30 +324,59 @@ export class Store {
   }
 
   /**
+   * A timer session, split at each midnight it ran past: 23:00 to 01:00 is an hour on
+   * each day, and a session over Sunday night counts toward both weeks. The pieces are
+   * rounded so they always add up to the session's rounded length.
+   */
+  logSession(activityID, start, end) {
+    const pieces = [];
+    let dayStart = new Date(start);
+    let loggedSoFar = 0;
+    while (dayStart < end) {
+      const upTo = new Date(Math.min(addDays(1, startOfDay(dayStart)).getTime(), end.getTime()));
+      const total = Math.round((upTo - start) / 60000);
+      if (total > loggedSoFar) {
+        pieces.push([startOfDay(dayStart), total - loggedSoFar]);
+        loggedSoFar = total;
+      }
+      dayStart = upTo;
+    }
+    // Anything under half a minute rounds to nothing and isn't worth an entry.
+    if (!pieces.length) return;
+    this.#mutate(() => pieces.forEach(([d, m]) => this.entries.push(this.#entry(activityID, d, m, false))));
+  }
+
+  /**
    * The typed value is a week *total*; the difference is written as adjustments. Time
-   * added goes on the selected logging day. Time taken away comes off the days holding
-   * the most of it, so no day ever drops below zero.
+   * added goes on the logging day. Time taken away takes back the most recently logged
+   * time first — lowering a total is nearly always correcting something you just did,
+   * like a click too many or a timer left running — and never takes a day below zero.
    */
   setTotal(target, activityID, start, end, day) {
-    const delta = target - this.minutes(activityID, start, end);
+    const delta = Math.max(0, target) - this.minutes(activityID, start, end);
     if (delta === 0) return;
     let changes = [[day, delta]];
     if (delta < 0) {
+      const logged = this.entriesIn(start, end).filter((e) => e.activityID === activityID);
       const byDay = new Map();
-      for (const e of this.entriesIn(start, end)) {
-        if (e.activityID === activityID) byDay.set(e.day, (byDay.get(e.day) ?? 0) + e.minutes);
-      }
+      for (const e of logged) byDay.set(e.day, (byDay.get(e.day) ?? 0) + e.minutes);
+      const taken = new Map();
       let left = -delta;
-      changes = [];
-      while (left > 0) {
-        const most = [...byDay].filter(([, m]) => m > 0).sort((a, b) => b[1] - a[1])[0];
-        if (!most) break;
-        const take = Math.min(most[1], left);
-        changes.push([DayStamp.parse(most[0]), -take]);
-        byDay.set(most[0], most[1] - take);
+      // Times only keep whole seconds, so ties (a session's pieces, quick clicks) go by
+      // the order they were logged in.
+      const newestFirst = logged.map((e, i) => [e, i])
+        .sort(([a, i], [b, j]) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || j - i)
+        .map(([e]) => e);
+      for (const e of newestFirst) {
+        if (left <= 0) break;
+        if (e.minutes <= 0) continue;
+        const take = Math.min(e.minutes, byDay.get(e.day) ?? 0, left);
+        if (take <= 0) continue;
+        taken.set(e.day, (taken.get(e.day) ?? 0) + take);
+        byDay.set(e.day, byDay.get(e.day) - take);
         left -= take;
       }
-      if (left > 0) changes.push([day, -left]);
+      changes = [...taken].sort(([a], [b]) => (a < b ? -1 : 1)).map(([d, m]) => [DayStamp.parse(d), -m]);
     }
     this.#mutate(() => changes.forEach(([d, m]) => this.entries.push(this.#entry(activityID, d, m, true))));
   }

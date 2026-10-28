@@ -8,8 +8,8 @@ struct ContentView: View {
 
     /// The week being viewed. Past weeks are fully editable — arrow back and log into them.
     @State private var viewedWeek = WeekMath.weekStart(for: Date())
-    /// The day a click attributes to. Always inside the viewed week.
-    @State private var loggingDay = WeekMath.startOfDay(Date())
+    /// Today, kept up to date so a window left open overnight moves on with the date.
+    @State private var today = WeekMath.startOfDay(Date())
     @State private var hoveredID: UUID?
     /// The group's leaderboard in place of your own chart and rows.
     /// TIMEPIE_SHOW_FRIENDS opens on it, for a test run.
@@ -46,9 +46,6 @@ struct ContentView: View {
     private struct RunningTimer: Codable, Equatable {
         let activityID: UUID
         let startedAt: Date
-        /// The day the timer *started* — a session running past midnight stays put
-        /// rather than jumping into the next day, or the next week.
-        let day: Date
 
         private static let key = "runningTimer"
 
@@ -212,6 +209,10 @@ struct ContentView: View {
         .onReceive(tick) { instant in
             // Only redraw while something is actually running.
             if running != nil { now = instant }
+            // Checked every tick rather than on a notification, so midnight, waking
+            // from sleep and a changed clock or time zone are all caught the same way.
+            let day = WeekMath.startOfDay(instant)
+            if day != today { dayChanged(to: day) }
         }
         // ← and → step through weeks. Focus lives here only when no text field has it,
         // so arrow keys still move the cursor while you're typing a name or an amount.
@@ -519,19 +520,14 @@ struct ContentView: View {
             // One timer at a time: starting a new one logs and closes the old.
             stopTimer()
             now = Date()
-            running = RunningTimer(activityID: activity.id,
-                                   startedAt: now,
-                                   day: WeekMath.startOfDay(now))
+            running = RunningTimer(activityID: activity.id, startedAt: now)
         }
     }
 
     private func stopTimer() {
         guard let timer = running else { return }
         running = nil
-        let minutes = Int((Date().timeIntervalSince(timer.startedAt) / 60).rounded())
-        // Anything under half a minute rounds to nothing and isn't worth an entry.
-        guard minutes > 0 else { return }
-        store.add(minutes: minutes, to: timer.activityID, on: timer.day)
+        store.logSession(timer.activityID, from: timer.startedAt, to: Date())
     }
 
     /// The running timer as the group sees it.
@@ -576,7 +572,7 @@ struct ContentView: View {
     }
 
     private func historyThumbs() -> [HistoryStrip.WeekThumb] {
-        let thisWeek = WeekMath.weekStart(for: Date())
+        let thisWeek = WeekMath.weekStart(for: today)
         return (-11...0).map { offset in
             let start = WeekMath.addWeeks(offset, to: thisWeek)
             let end = WeekMath.weekEnd(for: start)
@@ -608,9 +604,23 @@ struct ContentView: View {
 
     private func select(week: Date) {
         viewedWeek = WeekMath.weekStart(for: week)
-        // Keep the logging day inside the week you're looking at.
-        loggingDay = WeekMath.isSameWeek(viewedWeek, Date())
-            ? WeekMath.startOfDay(Date())
-            : viewedWeek
+    }
+
+    /// The day a click attributes to: today in this week, the Monday of any other.
+    /// Worked out at the moment of the click, so it can never be left behind on a
+    /// day that has passed.
+    private var loggingDay: Date {
+        let now = Date()
+        return WeekMath.isSameWeek(viewedWeek, now) ? WeekMath.startOfDay(now) : viewedWeek
+    }
+
+    /// Whatever was showing the old today follows on to the new one: this week moves
+    /// to the next on Monday, and an untouched stats page to the new day. A week or
+    /// day you went back to on purpose stays where you put it.
+    private func dayChanged(to day: Date) {
+        let previous = today
+        today = day
+        if viewedWeek == WeekMath.weekStart(for: previous) { select(week: day) }
+        if stats == StatsSelection(today: previous) { stats = StatsSelection(today: day) }
     }
 }

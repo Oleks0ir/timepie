@@ -228,30 +228,61 @@ final class Store {
         }
     }
 
+    /// A timer session, split at each midnight it ran past: 23:00 to 01:00 is an hour
+    /// on each day, and a session over Sunday night counts toward both weeks. The pieces
+    /// are rounded so they always add up to the session's rounded length.
+    func logSession(_ activityID: UUID, from start: Date, to end: Date) {
+        var pieces: [(day: Date, minutes: Int)] = []
+        var dayStart = start
+        var loggedSoFar = 0
+        while dayStart < end {
+            let nextDay = WeekMath.addDays(1, to: WeekMath.startOfDay(dayStart))
+            let upTo = min(nextDay, end)
+            let total = Int((upTo.timeIntervalSince(start) / 60).rounded())
+            if total > loggedSoFar {
+                pieces.append((WeekMath.startOfDay(dayStart), total - loggedSoFar))
+                loggedSoFar = total
+            }
+            dayStart = upTo
+        }
+        // Anything under half a minute rounds to nothing and isn't worth an entry.
+        guard !pieces.isEmpty else { return }
+        mutate {
+            for piece in pieces {
+                entries.append(Entry(activityID: activityID, day: piece.day, minutes: piece.minutes))
+            }
+        }
+    }
+
     /// The typed value is a week *total*; the difference is written as adjustments.
-    /// Time added goes on the selected logging day. Time taken away comes off the days
-    /// holding the most of it, so no day ever drops below zero: a timer left running
-    /// overnight, corrected here, would otherwise leave one day with far too much and
-    /// another with less than nothing.
+    /// Time added goes on the logging day. Time taken away takes back the most recently
+    /// logged time first — lowering a total is nearly always correcting something you
+    /// just did, like a click too many or a timer left running — and never takes a day
+    /// below zero.
     func setTotal(_ target: Int, for activityID: UUID,
                   weekStart: Date, weekEnd: Date, on day: Date) {
         let current = minutes(activityID: activityID, from: weekStart, to: weekEnd)
-        let delta = target - current
+        let delta = max(0, target) - current
         guard delta != 0 else { return }
         var changes = [(day: WeekMath.startOfDay(day), minutes: delta)]
         if delta < 0 {
-            var byDay = entries(from: weekStart, to: weekEnd)
-                .filter { $0.activityID == activityID }
-                .reduce(into: [Date: Int]()) { $0[$1.day, default: 0] += $1.minutes }
+            let logged = entries(from: weekStart, to: weekEnd).filter { $0.activityID == activityID }
+            var byDay = logged.reduce(into: [Date: Int]()) { $0[$1.day, default: 0] += $1.minutes }
+            var taken: [Date: Int] = [:]
             var left = -delta
-            changes = []
-            while left > 0, let most = byDay.filter({ $0.value > 0 }).max(by: { $0.value < $1.value }) {
-                let take = min(most.value, left)
-                changes.append((most.key, -take))
-                byDay[most.key] = most.value - take
+            // Saved times only keep whole seconds, so ties (a session's pieces, quick
+            // clicks) go by the order they were logged in.
+            let newestFirst = logged.enumerated()
+                .sorted { ($0.element.createdAt, $0.offset) > ($1.element.createdAt, $1.offset) }
+                .map(\.element)
+            for entry in newestFirst where left > 0 && entry.minutes > 0 {
+                let take = min(entry.minutes, byDay[entry.day, default: 0], left)
+                guard take > 0 else { continue }
+                taken[entry.day, default: 0] += take
+                byDay[entry.day, default: 0] -= take
                 left -= take
             }
-            if left > 0 { changes.append((WeekMath.startOfDay(day), -left)) }
+            changes = taken.sorted { $0.key < $1.key }.map { ($0.key, -$0.value) }
         }
         mutate {
             for change in changes {

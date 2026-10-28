@@ -74,8 +74,8 @@ const PlusCircle = () => html`<svg width="14" height="14" viewBox="0 0 14 14" fi
 function App() {
   const store = useStore();
   const [viewedWeek, setViewedWeek] = useState(() => W.weekStart(new Date()));
-  // The day a click attributes to. Always inside the viewed week.
-  const [loggingDay, setLoggingDay] = useState(() => W.startOfDay(new Date()));
+  // Today, kept up to date so a window left open overnight moves on with the date.
+  const [today, setToday] = useState(() => W.startOfDay(new Date()));
   const [hoveredID, setHoveredID] = useState(null);
   // The group's leaderboard in place of your own chart and rows.
   const [showingFriends, setShowingFriends] = useState(false);
@@ -138,11 +138,26 @@ function App() {
     return () => clearInterval(t);
   }, [showingFriends]);
 
-  const select = (week) => {
-    const start = W.weekStart(week);
-    setViewedWeek(start);
-    setLoggingDay(W.isSameWeek(start, new Date()) ? W.startOfDay(new Date()) : start);
-  };
+  const select = (week) => setViewedWeek(W.weekStart(week));
+
+  // The day a click attributes to: today in this week, the Monday of any other. Worked
+  // out at the moment of the click, so it can never be left behind on a day that has passed.
+  const loggingDay = () => (W.isSameWeek(viewedWeek, new Date()) ? W.startOfDay(new Date()) : viewedWeek);
+
+  // Checked every second rather than on an event, so midnight, waking from sleep and a
+  // changed clock or time zone are all caught the same way. Whatever was showing the
+  // old today follows on to the new one: this week moves to the next on Monday, and an
+  // untouched stats page to the new day. A week or day you went back to stays put.
+  useEffect(() => {
+    const t = setInterval(() => {
+      const day = W.startOfDay(new Date());
+      if (day.getTime() === today.getTime()) return;
+      setToday(day);
+      setViewedWeek((week) => (week.getTime() === W.weekStart(today).getTime() ? W.weekStart(day) : week));
+      setStats((s) => (JSON.stringify(s) === JSON.stringify(W.Stats.initial(today)) ? W.Stats.initial(day) : s));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [today]);
 
   /** ← / →: a week, or on the stats page whatever span it shows. */
   const step = (n) => {
@@ -272,9 +287,7 @@ function App() {
     if (!timer) return;
     setRunning(null);
     runningRef.current = null;
-    const minutes = Math.round((Date.now() - timer.startedAt) / 60000);
-    // Anything under half a minute rounds to nothing and isn't worth an entry.
-    if (minutes > 0) store.add(minutes, timer.activityID, timer.day);
+    store.logSession(timer.activityID, new Date(timer.startedAt), new Date());
   };
 
   const toggleTimer = (activity) => {
@@ -283,15 +296,14 @@ function App() {
     stopTimer();
     const startedAt = Date.now();
     setNow(startedAt);
-    // The day the timer *started* — a session running past midnight stays put.
-    setRunning({ activityID: activity.id, startedAt, day: W.startOfDay(new Date(startedAt)) });
+    setRunning({ activityID: activity.id, startedAt });
   };
 
   const slices = activities.map((a) => ({
     id: a.id, name: a.name, minutes: Math.max(0, minutesFor(a)), colorSlot: a.colorSlot,
   }));
 
-  const thisWeek = W.weekStart(new Date());
+  const thisWeek = W.weekStart(today);
   const thumbs = Array.from({ length: 12 }, (_, i) => {
     const start = W.addWeeks(i - 11, thisWeek);
     const end = W.weekEnd(start);
@@ -397,8 +409,8 @@ function App() {
             elapsedSeconds=${running?.activityID === a.id ? elapsed : 0}
             takenSlots=${takenSlots}
             onHover=${(on) => setHoveredID(on ? a.id : null)}
-            onAdd=${(m) => store.add(m, a.id, loggingDay)}
-            onSetTotal=${(m) => store.setTotal(m, a.id, viewedWeek, weekEnd, loggingDay)}
+            onAdd=${(m) => store.add(m, a.id, loggingDay())}
+            onSetTotal=${(m) => store.setTotal(m, a.id, viewedWeek, weekEnd, loggingDay())}
             onToggleTimer=${() => toggleTimer(a)}
             onSetColor=${(slot) => store.setColor(a.id, slot)}
             onRename=${(name) => store.rename(a.id, name)}
@@ -632,7 +644,11 @@ function logDetail(entry, added) {
   const parts = [added.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })];
   const day = W.DayStamp.parse(entry.day);
   if (day.getTime() !== W.startOfDay(added).getTime()) {
-    parts.push(`for ${day.toLocaleDateString(undefined, { weekday: 'long' })}`);
+    // A weekday alone only says which day within the week it was added in.
+    const sameWeek = W.isSameWeek(day, added);
+    parts.push(`for ${day.toLocaleDateString(undefined, sameWeek
+      ? { weekday: 'long' }
+      : { weekday: 'short', month: 'short', day: 'numeric' })}`);
   }
   if (entry.isAdjustment) parts.push('total edited');
   return parts.join(' · ');
